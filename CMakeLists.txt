@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(DynamicPals)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Default to UE4SS's required custom config if none is specified
@@ -9,7 +9,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "Game__Shipping__Win64" CACHE STRING "Choose the type of build." FORCE)
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/deps/pal-core/cmake/PalCoreCompiler.cmake")
+
 add_subdirectory(RE-UE4SS)
+
+if(NOT TARGET PalCore::Runtime)
+    add_subdirectory(deps/pal-core pal-core)
+endif()
 
 # Common files shared by both the online and offline builds
 set(COMMON_SRC_FILES
@@ -45,7 +51,7 @@ target_include_directories(DynamicPals PRIVATE
     "RE-UE4SS/deps/first/zydis/include" 
     "RE-UE4SS/deps/first/zydis/dependencies/zycore/include" 
 )
-target_link_libraries(DynamicPals PUBLIC UE4SS Zydis wininet)
+target_link_libraries(DynamicPals PUBLIC UE4SS Zydis wininet PRIVATE PalCore::Runtime)
 
 # -------------------------------------------------------------------------
 # TARGET 2: Offline Build (Compiles dummy Updater_Offline.cpp - No WinINet)
@@ -60,7 +66,7 @@ target_include_directories(DynamicPals_Offline PRIVATE
     "RE-UE4SS/deps/first/zydis/include" 
     "RE-UE4SS/deps/first/zydis/dependencies/zycore/include" 
 )
-target_link_libraries(DynamicPals_Offline PUBLIC UE4SS Zydis)
+target_link_libraries(DynamicPals_Offline PUBLIC UE4SS Zydis PRIVATE PalCore::Runtime)
 
 # =========================================================================
 # BUILD ORDER DEPENDENCIES (Prevents Parallel Compilation Race Conditions)

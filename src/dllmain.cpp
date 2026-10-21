@@ -19,6 +19,8 @@
 #include "UI/UIRegistry.hpp"
 #include "PalProcessor.hpp"
 
+#include <PalCore/Runtime/GameThread.hpp>
+
 using namespace RC;
 using namespace RC::Unreal;
 
@@ -108,12 +110,16 @@ public:
     ~DynPalsMod() override 
     {
         GGCListener.Unregister();
+        if (bStarted) PalCore::GameThread::Stop();
     }
 
     auto on_update() -> void override {}
     
     auto on_unreal_init() -> void override
     {
+        bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
+        if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
+
         DynPals::AsyncHelper::Initialize();
 
         // Register the listener safely
@@ -135,6 +141,9 @@ public:
             DynPals::UIManager::Get();
         }
     }
+
+private:
+    bool bStarted = false;
 };
 
 #define DYNPALS_MOD_API __declspec(dllexport)
