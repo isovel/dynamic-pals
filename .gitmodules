@@ -4,3 +4,6 @@
 [submodule "deps/pal-core"]
 	path = deps/pal-core
 	url = https://github.com/isovel/pal-core.git
+[submodule "deps/pal-config-lib"]
+	path = deps/pal-config-lib
+	url = https://github.com/isovel/pal-config-lib.git

@@ -109,6 +109,7 @@ public:
     ~DynPalsMod() override 
     {
         GGCListener.Unregister();
+        PalCore::GameThread::Tasks().RemoveFrameCallback(ConfigPoll);
         if (bStarted) PalCore::GameThread::Stop();
     }
 
@@ -118,6 +119,7 @@ public:
     {
         bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
         if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
+        ConfigPoll = PalCore::GameThread::Tasks().AddFrameCallback([](float) { DynPals::SaveManager::Get().TickConfig(); });
 
 
         // Register the listener safely
@@ -142,6 +144,7 @@ public:
 
 private:
     bool bStarted = false;
+    std::uint64_t ConfigPoll = 0;
 };
 
 #define DYNPALS_MOD_API __declspec(dllexport)

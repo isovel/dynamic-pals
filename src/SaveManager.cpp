@@ -3,8 +3,15 @@
 #include "PalProcessor.hpp"
 #include "InputManager.hpp"
 #include "Utils.hpp"
+#include "NotificationManager.hpp"
+#include "SettingsStore.hpp"
 #include <DynamicOutput/DynamicOutput.hpp>
+#include <filesystem>
 #include <fstream>
+
+#include <PalCfg/Load.hpp>
+#include <PalCfg/Paths.hpp>
+#include <PalCfg/Win32.hpp>
 #include "json.hpp"
 
 #include <Unreal/UObject.hpp>
@@ -14,6 +21,50 @@ using namespace RC;
 using namespace RC::Unreal;
 
 namespace DynPals {
+
+    namespace {
+        // config.json's diagnostics: notes to the log, warnings and errors on screen as well.
+        class ConfigSink final : public PalCfg::IDiagnosticSink {
+        public:
+            void Report(const PalCfg::Diagnostic& Diagnostic) override {
+                const std::wstring Line = Utils::StringToWString(Diagnostic.field.empty() ? Diagnostic.message : Diagnostic.field + ": " + Diagnostic.message);
+                switch (Diagnostic.severity) {
+                case PalCfg::Severity::Note:
+                    DP_LOG(Verbose, "[Config] {}", Line);
+                    break;
+                case PalCfg::Severity::Warning:
+                    DP_LOG(Warning, "[Config] {}", Line);
+                    NotificationManager::Get().EnqueueToast(L"[DynPals] config.json: " + Line, EPalLogPriority::Important, EPalLogContentToneType::Negative);
+                    break;
+                case PalCfg::Severity::Error:
+                    DP_LOG(Error, "[Config] {}", Line);
+                    break;
+                }
+            }
+        };
+
+        ConfigSink& Sink() {
+            static ConfigSink Instance;
+            return Instance;
+        }
+
+        // The newest world save, whose Settings seed a first config.json.
+        std::wstring NewestWorldSave(const std::wstring& Folder, const std::wstring& Prefix) {
+            std::error_code Error;
+            std::wstring Newest;
+            std::filesystem::file_time_type NewestTime{};
+            for (const auto& Entry : std::filesystem::directory_iterator(Folder, Error)) {
+                const std::wstring Name = Entry.path().filename().wstring();
+                if (!Entry.is_regular_file(Error) || !Name.starts_with(Prefix) || !Name.ends_with(L".json")) continue;
+                const auto Time = Entry.last_write_time(Error);
+                if (Newest.empty() || Time > NewestTime) {
+                    Newest = Entry.path().wstring();
+                    NewestTime = Time;
+                }
+            }
+            return Newest;
+        }
+    }
 
     void DynPalsSettings::CacheKeybinds() {
     bMenuIsGamepad = (MenuKey.rfind(L"Gamepad_", 0) == 0);
@@ -32,15 +83,68 @@ namespace DynPals {
 
     void SaveManager::Initialize(const std::wstring& BasePath) {
         ConfigPath = BasePath + L"Paks/~mods/"; 
+        LoadGlobal();
+        Relayer();
+    }
+
+    void SaveManager::LoadGlobal() {
+        static const int Anchor = 0;
+        std::string Folder;
+        if (!PalCfg::ModuleDirectory(&Anchor, Folder)) {
+            DP_LOG(Error, "Could not find the mod's folder; settings stay at their defaults for this session.");
+            return;
+        }
+
+        Config = std::make_unique<ConfigFile>(kFields, PalCfg::ResolveAgainst(Folder, "../config.json"), kSchema.ModId());
+        Config->SetSink(Sink());
+        Config->SetOnReload([this](const DynPalsSettings&) {
+            Relayer();
+            DP_LOG(Default, "[Config] config.json reloaded.");
+        });
+
+        std::error_code Error;
+        if (std::filesystem::exists(Utils::StringToWString(Config->Path()), Error)) {
+            Config->Load();
+            return;
+        }
+
+        DynPalsSettings Imported;
+        const std::wstring Source = NewestWorldSave(ConfigPath, PersistFileName);
+        if (!Source.empty()) {
+            PalCfg::LoadFromText(kFields, SettingsObjectOf(Utils::ReadFileToString(Source)), Imported, Sink());
+        }
+        if (Config->Save(Imported)) {
+            if (Source.empty()) DP_LOG(Default, "[Config] Wrote config.json with the defaults.");
+            else DP_LOG(Default, "[Config] Wrote config.json from the settings in '{}'.", std::filesystem::path(Source).filename().wstring());
+        }
+    }
+
+    void SaveManager::Relayer() {
+        const DynPalsSettings Global = Config ? *Config->Get() : DynPalsSettings{};
+        Settings = LayerWorld(Global, WorldSettingsText, Sink());
         Settings.CacheKeybinds();
+    }
+
+    void SaveManager::TickConfig() {
+        if (Config) Config->Tick(ConfigFile::Clock::now());
+    }
+
+    void SaveManager::SaveGlobal() {
+        if (!Config) return;
+        DynPalsSettings Next = *Config->Get();
+        Next.MenuKey = Settings.MenuKey;
+        Next.MenuModifier = Settings.MenuModifier;
+        Next.RerollKey = Settings.RerollKey;
+        Next.RerollModifier = Settings.RerollModifier;
+        Config->Save(Next);
     }
 
     void SaveManager::Reset() {
         CurrentWorldSaveID = L"";
         PersistedSwaps.clear();
         AccessOrder.clear(); 
-        Settings = DynPalsSettings{};
-        Settings.CacheKeybinds();
+        WorldSettingsText = "{}";
+        Relayer();
     }
 
     void SaveManager::MarkAccessed(const std::wstring& InstanceID) {
@@ -74,42 +178,21 @@ namespace DynPals {
         CurrentWorldSaveID = WorldSaveID;
         PersistedSwaps.clear();
         AccessOrder.clear(); 
-        Settings = DynPalsSettings{};
+        WorldSettingsText = "{}";
+        Relayer();
 
         std::wstring persistPath = ConfigPath + PersistFileName + CurrentWorldSaveID + L".json";
         std::string content = Utils::ReadFileToString(persistPath);
 
-        if (content.empty()) {
-            Settings.CacheKeybinds();
-            return;
-        }
+        if (content.empty()) return;
 
         try {
             auto data = nlohmann::ordered_json::parse(content);
             
             if (data.contains("Settings") && data.at("Settings").is_object()) {
-                Settings.bFocusPal = data.at("Settings").value("FocusPal", true);
-                Settings.CameraRotation = data.at("Settings").value("CameraRotation", 180.0);
-                Settings.bRelativeCamera = data.at("Settings").value("RelativeCamera", true);
-                
-                Settings.MenuKey = Utils::StringToWString(data.at("Settings").value("MenuKey", "N"));
-                Settings.MenuModifier = Utils::StringToWString(data.at("Settings").value("MenuModifier", "LeftAlt"));
-                Settings.TestMenuKey = Utils::StringToWString(data.at("Settings").value("TestMenuKey", "G"));
-                Settings.TestMenuModifier = Utils::StringToWString(data.at("Settings").value("TestMenuModifier", "LeftAlt"));
-
-                Settings.RerollKey = Utils::StringToWString(data.at("Settings").value("RerollKey", "None"));
-                Settings.RerollModifier = Utils::StringToWString(data.at("Settings").value("RerollModifier", "None"));
-
-            } else {
-                Settings.bFocusPal = true;
-                Settings.CameraRotation = 180.0;
-                Settings.bRelativeCamera = true;
-                Settings.MenuKey = L"N";
-                Settings.MenuModifier = L"LeftAlt";
-                Settings.TestMenuKey = L"G";
-                Settings.TestMenuModifier = L"LeftAlt";
+                WorldSettingsText = data.at("Settings").dump();
+                Relayer();
             }
-            Settings.CacheKeybinds();
 
             if (data.contains("PersistencePals") && data.at("PersistencePals").is_object()) {
                 for (auto& [instanceIdStr, palNode] : data.at("PersistencePals").items()) {
@@ -146,7 +229,6 @@ namespace DynPals {
             }
         } catch (...) {
             DP_LOG(Error, "Failed to parse world persistence data. File might be corrupted.\n");
-            Settings.CacheKeybinds();
         }
     }
 
@@ -158,7 +240,8 @@ namespace DynPals {
         // Fast snapshot on Game Thread (<0.05ms)
         auto palsCopy = PersistedSwaps;
         auto accessOrderCopy = AccessOrder;
-        auto settingsCopy = Settings;
+        WorldSettingsText = Config ? WorldOverride(*Config->Get(), Settings) : "{}";
+        std::string settingsCopy = WorldSettingsText;
         std::wstring worldIdCopy = CurrentWorldSaveID;
 
         // Offload JSON stringification and disk I/O to background thread
@@ -174,20 +257,7 @@ namespace DynPals {
             systemObj["WorldID"] = Utils::WStringToString(worldIdCopy);
             out["System"] = systemObj;
             
-            nlohmann::ordered_json settingsObj;
-            settingsObj["FocusPal"] = settingsCopy.bFocusPal;
-            settingsObj["CameraRotation"] = settingsCopy.CameraRotation;
-            settingsObj["RelativeCamera"] = settingsCopy.bRelativeCamera;
-            
-            settingsObj["MenuKey"] = Utils::WStringToString(settingsCopy.MenuKey);
-            settingsObj["MenuModifier"] = Utils::WStringToString(settingsCopy.MenuModifier);
-            settingsObj["TestMenuKey"] = Utils::WStringToString(settingsCopy.TestMenuKey);
-            settingsObj["TestMenuModifier"] = Utils::WStringToString(settingsCopy.TestMenuModifier);
-
-            settingsObj["RerollKey"] = Utils::WStringToString(settingsCopy.RerollKey);
-            settingsObj["RerollModifier"] = Utils::WStringToString(settingsCopy.RerollModifier);
-
-            out["Settings"] = settingsObj;
+            out["Settings"] = nlohmann::ordered_json::parse(settingsCopy);
             
             nlohmann::ordered_json palsObj;
             for (const auto& id : accessOrderCopy) {

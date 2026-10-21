@@ -17,6 +17,10 @@ if(NOT TARGET PalCore::Runtime)
     add_subdirectory(deps/pal-core pal-core)
 endif()
 
+if(NOT TARGET PalCfg::Core)
+    add_subdirectory(deps/pal-config-lib pal-config-lib)
+endif()
+
 # Common files shared by both the online and offline builds
 set(COMMON_SRC_FILES
     "src/dllmain.cpp"
@@ -36,6 +40,7 @@ set(COMMON_SRC_FILES
     "src/UI/Views/TestUI.cpp"      
     "src/UI/Views/UIManager.cpp"  
     "src/NativeAsyncLoader.cpp"  
+    "src/SettingsStore.cpp"
 )
 
 # -------------------------------------------------------------------------
@@ -51,7 +56,7 @@ target_include_directories(DynamicPals PRIVATE
     "RE-UE4SS/deps/first/zydis/include" 
     "RE-UE4SS/deps/first/zydis/dependencies/zycore/include" 
 )
-target_link_libraries(DynamicPals PUBLIC UE4SS Zydis wininet PRIVATE PalCore::Runtime)
+target_link_libraries(DynamicPals PUBLIC UE4SS Zydis wininet PRIVATE PalCore::Runtime PalCfg::Core)
 
 # -------------------------------------------------------------------------
 # TARGET 2: Offline Build (Compiles dummy Updater_Offline.cpp - No WinINet)
@@ -66,7 +71,7 @@ target_include_directories(DynamicPals_Offline PRIVATE
     "RE-UE4SS/deps/first/zydis/include" 
     "RE-UE4SS/deps/first/zydis/dependencies/zycore/include" 
 )
-target_link_libraries(DynamicPals_Offline PUBLIC UE4SS Zydis PRIVATE PalCore::Runtime)
+target_link_libraries(DynamicPals_Offline PUBLIC UE4SS Zydis PRIVATE PalCore::Runtime PalCfg::Core)
 
 # =========================================================================
 # BUILD ORDER DEPENDENCIES (Prevents Parallel Compilation Race Conditions)
