@@ -37,8 +37,13 @@ namespace DynPals {
         // Drops the window before the connection it was made on.
         void Detach();
 
-        // The game's OK/Cancel dialog; false without PalUI.
+        // The game's OK/Cancel dialog, queued behind one already showing; false without PalUI.
         bool ShowChoice(const std::wstring& Message, std::function<void(bool)> OnResult);
+
+        // Saves a debounced menu edit now.
+        void FlushPendingSave();
+        // config.json changed: the camera follows it and the open menu is filled again.
+        void OnSettingsReloaded();
 
         void PreloadUI(RC::Unreal::UObject* PC);
 
@@ -76,7 +81,7 @@ namespace DynPals {
         std::chrono::steady_clock::time_point LastSliderChangeTime;
 
         void TriggerSaveDebounced();
-        void FlushPendingSave();
+        void ShowNextChoice();
 
         // --- Camera Helper Methods ---
         void EnablePalCamera();
@@ -87,6 +92,9 @@ namespace DynPals {
         bool bHideInvalidSwaps = true;
         bool bNeedsRefresh = false;
         bool bWasOpen = false;
+        bool bPrefsStale = false;
+        // When the last key capture ended, so the Escape that ended it does not also close the menu.
+        std::chrono::steady_clock::time_point CaptureEndedAt;
 
         // Target Context
         RC::Unreal::UObject* CurrentPlayerController = nullptr;

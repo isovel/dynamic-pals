@@ -14,7 +14,9 @@
 #include <map>
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <optional>
+#include <utility>
 
 using namespace RC;
 using namespace RC::Unreal;
@@ -30,6 +32,7 @@ namespace DynPals {
         std::vector<std::vector<int>> PackConfigs;
         PalUI::Client::Row CaptureRow;
         std::optional<PalUI::Client::Dialog> Choice;
+        std::deque<std::pair<std::wstring, std::function<void(bool)>>> Choices;
         bool bCloseRequested = false;
     };
 
@@ -427,13 +430,34 @@ namespace DynPals {
     void UIManager::Detach() {
         if (S->Window) Close();
         S->Choice.reset();
+        S->Choices.clear();
         UI = nullptr;
     }
 
     bool UIManager::ShowChoice(const std::wstring& Message, std::function<void(bool)> OnResult) {
         if (!UI) return false;
+        S->Choices.emplace_back(Message, std::move(OnResult));
+        if (!S->Choice || !S->Choice->IsPending()) ShowNextChoice();
+        return true;
+    }
+
+    // The next dialog waits for Tick, since a dialog cannot go while its own handler runs.
+    void UIManager::ShowNextChoice() {
+        if (!UI || S->Choices.empty()) return;
+        auto [Message, OnResult] = std::move(S->Choices.front());
+        S->Choices.pop_front();
         S->Choice.emplace(*UI);
-        return S->Choice->Show(Utils::WStringToString(Message), PalUI::Client::DialogKind::OkCancel, std::move(OnResult));
+        S->Choice->Show(Utils::WStringToString(Message), PalUI::Client::DialogKind::OkCancel, std::move(OnResult));
+    }
+
+    void UIManager::OnSettingsReloaded() {
+        if (!S->Window) return;
+        const auto& Settings = SaveManager::Get().Settings;
+        if (Settings.bFocusPal && !bIsPalCameraActive) EnablePalCamera();
+        else if (!Settings.bFocusPal && bIsPalCameraActive) DisablePalCamera();
+        else if (bIsPalCameraActive) UpdatePalCameraRotation(Settings.CameraRotation);
+        bNeedsRefresh = true;
+        bPrefsStale = true;
     }
 
     bool UIManager::IsMenuOpen() const {
@@ -566,6 +590,7 @@ namespace DynPals {
         // since the window cannot go while its own handler runs.
         S->Window->SetCancel([this]() {
             if (InputManager::Get().IsCapturing()) return;
+            if (std::chrono::steady_clock::now() - CaptureEndedAt < std::chrono::milliseconds(250)) return;
             S->bCloseRequested = true;
         });
 
@@ -611,11 +636,13 @@ namespace DynPals {
                 }
                 Settings.CacheKeybinds();
                 SaveManager::Get().SaveGlobal();
+                CaptureEndedAt = std::chrono::steady_clock::now();
 
                 // The bound key shows on the row's button, which takes no new text, so the page is filled again.
                 if (S->Prefs.IsValid() && S->Prefs.Clear()) FillPreferences();
             },
             [this]() {
+                CaptureEndedAt = std::chrono::steady_clock::now();
                 S->CaptureRow.SetText("");
             }
         );
@@ -996,6 +1023,7 @@ namespace DynPals {
     }
 
     void UIManager::Tick() {
+        if (!S->Choices.empty() && (!S->Choice || !S->Choice->IsPending())) ShowNextChoice();
         if (!S->Window) return;
 
         if (bWasOpen && !S->Window->IsOpen()) {
@@ -1030,6 +1058,11 @@ namespace DynPals {
                 LastObservedLabel = p->SwapLabel;
                 bNeedsRefresh = true;
             }
+        }
+
+        if (bPrefsStale) {
+            bPrefsStale = false;
+            if (S->Prefs.IsValid() && S->Prefs.Clear()) FillPreferences();
         }
 
         if (bNeedsRefresh) {

@@ -437,9 +437,10 @@ static void OnSessionUnloading() {
     LastWorld = nullptr;
     GCachedModActorClass = nullptr;
 
+    // The menu first: closing it saves a pending edit into the world still loaded.
+    UIManager::Get().CloseForUnload();
     SaveManager::Get().Reset();
     PalProcessor::Get().ClearAllSwappedStatus();
-    UIManager::Get().CloseForUnload();
     Utils::Caches::ClearAll();
     NativeAsyncLoader::ClearCache();
 }
@@ -470,9 +471,10 @@ static void OnSessionPlaying() {
     DP_LOG(Default, "New Session Detected. Standby active. Waiting for the party to resolve...\n");
 
     PalCore::GameThread::Tasks().RemoveFrameCallback(std::exchange(PartyWait, 0));
-    PartyWait = PalCore::GameThread::Tasks().AddFrameCallback([Waited = 0.0f](float Seconds) mutable {
-        Waited += Seconds;
-        if (PalCore::PartyHandles().empty() && Waited < PartyWaitSeconds) return;
+    // Wall time: frame steps are clamped, which would stretch the wait at a low frame rate.
+    const auto Deadline = std::chrono::steady_clock::now() + std::chrono::duration<float>(PartyWaitSeconds);
+    PartyWait = PalCore::GameThread::Tasks().AddFrameCallback([Deadline](float) {
+        if (PalCore::PartyHandles().empty() && std::chrono::steady_clock::now() < Deadline) return;
         PalCore::GameThread::Tasks().RemoveFrameCallback(std::exchange(PartyWait, 0));
         OnSettled();
     });

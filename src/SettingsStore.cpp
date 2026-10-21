@@ -45,4 +45,14 @@ namespace DynPals {
         if (Found == Save.end() || !Found->is_object()) return "{}";
         return Found->dump();
     }
+
+    std::wstring NewestWorldSave(const std::vector<SaveCandidate>& Files, std::wstring_view Prefix) {
+        const SaveCandidate* Newest = nullptr;
+        for (const SaveCandidate& File : Files) {
+            const std::wstring Name = std::filesystem::path(File.Path).filename().wstring();
+            if (!Name.starts_with(Prefix) || !Name.ends_with(L".json")) continue;
+            if (!Newest || File.Modified > Newest->Modified) Newest = &File;
+        }
+        return Newest ? Newest->Path : std::wstring();
+    }
 }

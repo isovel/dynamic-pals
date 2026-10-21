@@ -123,8 +123,16 @@ public:
         bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
         if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
 
-        UI.emplace("DynamicPals", [](std::uint8_t, std::string_view Context, std::string_view Message) {
-            DP_LOG(Warning, "[PalUI] {}: {}", DynPals::Utils::StringToWString(std::string(Context)), DynPals::Utils::StringToWString(std::string(Message)));
+        UI.emplace("DynamicPals", [](std::uint8_t Severity, std::string_view Context, std::string_view Message) {
+            const std::wstring Where = DynPals::Utils::StringToWString(std::string(Context));
+            const std::wstring What = DynPals::Utils::StringToWString(std::string(Message));
+            // PalUI's Severity: Note, Warning, Error, then detail.
+            switch (Severity) {
+            case 0: DP_LOG(Default, "[PalUI] {}: {}", Where, What); break;
+            case 1: DP_LOG(Warning, "[PalUI] {}: {}", Where, What); break;
+            case 2: DP_LOG(Error, "[PalUI] {}: {}", Where, What); break;
+            default: DP_LOG(Verbose, "[PalUI] {}: {}", Where, What); break;
+            }
         });
         if (!UI->IsConnected()) {
             DP_LOG(Error, "PalUI.dll did not accept the connection; the Alt+N menu is off. Install the PalUI mod beside DynamicPals.");

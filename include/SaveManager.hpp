@@ -9,6 +9,7 @@
 #include <PalCfg/ConfigFile.hpp>
 
 #include <memory>
+#include <optional>
 
 namespace DynPals {
 
@@ -43,11 +44,16 @@ namespace DynPals {
         void MarkAccessed(const std::wstring& InstanceID);
         void LoadGlobal();
         void Relayer();
+        // config.json's settings, or those it could not be written with.
+        DynPalsSettings Global() const;
 
         using ConfigFile = PalCfg::ConfigFile<DynPalsSettings, kFields.size()>;
         std::unique_ptr<ConfigFile> Config;
         // The loaded world's Settings object, kept so a reload of config.json can lay it over again.
         std::string WorldSettingsText = "{}";
+        // The global settings Settings was last laid over; a world override is measured from these.
+        DynPalsSettings LayeredGlobal;
+        std::optional<DynPalsSettings> Unsaved;
 
         std::wstring ConfigPath;
         std::wstring PersistFileName = L"_DynPals_Save_";

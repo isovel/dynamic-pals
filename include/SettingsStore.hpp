@@ -1,5 +1,7 @@
 #pragma once
+#include <filesystem>
 #include <string>
+#include <vector>
 #include <string_view>
 
 #include <PalCfg/Diagnostics.hpp>
@@ -17,4 +19,12 @@ namespace DynPals {
 
     // The save's Settings object as text, or "{}".
     std::string SettingsObjectOf(std::string_view SaveJson);
+
+    struct SaveCandidate {
+        std::wstring Path;
+        std::filesystem::file_time_type Modified;
+    };
+
+    // The most recently modified Prefix*.json among Files, or empty.
+    std::wstring NewestWorldSave(const std::vector<SaveCandidate>& Files, std::wstring_view Prefix);
 }
