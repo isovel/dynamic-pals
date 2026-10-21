@@ -22,6 +22,10 @@
 #include <chrono> 
 #include "../include/NativeAsyncLoader.hpp"
 
+#include <PalCore/Runtime/Input.hpp>
+#include <PalCore/Runtime/Reflect.hpp>
+#include <PalCore/Utf.hpp>
+
 namespace DynPals::Utils {
 
     struct ScopedProfiler {
@@ -51,42 +55,10 @@ namespace DynPals::Utils {
 
     inline void SafeProcessEvent(RC::Unreal::UObject* Obj, RC::Unreal::UFunction* Func, void* Params) {
         if (!Obj || !Func) return;
-        __try {
-            Obj->ProcessEvent(Func, Params);
-        }
-        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {}
+        PalCore::Invoke(Obj, Func, Params);
     }
 
     namespace Caches {
-        struct CacheKey {
-            UClass* Cls;
-            std::wstring Name; // <--- CRITICAL FIX: Retained String Memory
-            bool operator<(const CacheKey& o) const {
-                if (Cls != o.Cls) return Cls < o.Cls;
-                return Name < o.Name;
-            }
-        };
-        struct Key {
-            std::wstring Path;
-            std::wstring Name;
-            bool operator<(const Key& Other) const {
-                if (Path != Other.Path) return Path < Other.Path;
-                return Name < Other.Name;
-            }
-        };
-
-        inline std::map<CacheKey, FProperty*> PropCache;
-        inline std::shared_mutex PropMutex;
-        inline std::map<CacheKey, UFunction*> FuncCache;
-        inline std::shared_mutex FuncMutex;
-        inline std::map<std::wstring, UObject*> LibraryCache;
-        inline std::shared_mutex LibraryMutex;
-        inline std::map<Key, UFunction*> LibFuncCache;
-        inline std::shared_mutex LibFuncMutex;
-        inline std::map<std::wstring, UClass*> ClassCache;
-        inline std::shared_mutex ClassMutex;
-        inline std::map<std::wstring, UFunction*> KismetFuncCache;
-        inline std::shared_mutex KismetFuncMutex;
         inline std::map<std::wstring, std::vector<std::wstring>> FolderCache;
         inline std::shared_mutex FolderMutex;
         
@@ -94,64 +66,35 @@ namespace DynPals::Utils {
         inline std::shared_mutex ScannedFoldersMutex;
 
         inline void ClearAll() {
-            std::unique_lock<std::shared_mutex> lock1(PropMutex);
-            std::unique_lock<std::shared_mutex> lock2(FuncMutex);
-            std::unique_lock<std::shared_mutex> lock4(LibraryMutex);
-            std::unique_lock<std::shared_mutex> lock5(LibFuncMutex);
-            std::unique_lock<std::shared_mutex> lock6(ClassMutex);
-            std::unique_lock<std::shared_mutex> lock7(KismetFuncMutex);
             std::unique_lock<std::shared_mutex> lock8(FolderMutex);
             std::unique_lock<std::shared_mutex> lock9(ScannedFoldersMutex);
 
-            PropCache.clear(); FuncCache.clear(); LibraryCache.clear();
-            LibFuncCache.clear(); ClassCache.clear(); KismetFuncCache.clear(); FolderCache.clear();
+            FolderCache.clear();
             ScannedFolders.clear();
         }
     }
 
+    // Takes a default object's path, as "/Script/Engine.Default__KismetSystemLibrary".
     inline UObject* GetLibrary(const wchar_t* LibraryPath) {
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::LibraryMutex);
-            if (Caches::LibraryCache.count(LibraryPath)) return Caches::LibraryCache[LibraryPath];
-        }
-        UObject* Lib = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, LibraryPath);
-        std::unique_lock<std::shared_mutex> write_lock(Caches::LibraryMutex);
-        return Caches::LibraryCache[LibraryPath] = Lib;
+        std::wstring ClassPath(LibraryPath);
+        if (const size_t At = ClassPath.find(L".Default__"); At != std::wstring::npos) ClassPath.erase(At + 1, 9);
+        return PalCore::DefaultObject(ClassPath);
     }
 
     inline UFunction* GetLibraryFunction(const wchar_t* LibraryPath, const wchar_t* FunctionName) {
-        Caches::Key k{ LibraryPath, FunctionName };
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::LibFuncMutex);
-            if (Caches::LibFuncCache.count(k)) return Caches::LibFuncCache[k];
-        }
         UObject* Lib = GetLibrary(LibraryPath);
-        UFunction* Func = Lib ? Lib->GetFunctionByNameInChain(FunctionName) : nullptr;
-        std::unique_lock<std::shared_mutex> write_lock(Caches::LibFuncMutex);
-        return Caches::LibFuncCache[k] = Func;
+        return Lib ? PalCore::FindFunction(Lib, FunctionName) : nullptr;
     }
 
     inline UClass* GetClassCached(const wchar_t* ClassPath, bool bSilenceLogs = false) {
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::ClassMutex);
-            if (Caches::ClassCache.count(ClassPath)) return Caches::ClassCache[ClassPath];
-        }
-        UClass* Cls = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, ClassPath);
-        std::unique_lock<std::shared_mutex> write_lock(Caches::ClassMutex);
-        return Caches::ClassCache[ClassPath] = Cls;
+        return PalCore::FindClass(ClassPath);
     }
 
     inline UObject* GetKismetSystemLibrary() { return GetLibrary(STR("/Script/Engine.Default__KismetSystemLibrary")); }
 
     inline UFunction* GetKismetFunction(const wchar_t* FunctionName) {
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::KismetFuncMutex);
-            if (Caches::KismetFuncCache.count(FunctionName)) return Caches::KismetFuncCache[FunctionName];
-        }
         UObject* KSL = GetKismetSystemLibrary();
-        UFunction* Func = KSL ? KSL->GetFunctionByNameInChain(FunctionName) : nullptr;
-        std::unique_lock<std::shared_mutex> write_lock(Caches::KismetFuncMutex);
-        return Caches::KismetFuncCache[FunctionName] = Func;
+        return KSL ? PalCore::FindFunction(KSL, FunctionName) : nullptr;
     }
 
     inline bool IsObjectValid(UObject* Obj) {
@@ -190,14 +133,8 @@ namespace DynPals::Utils {
         return meshName + buf;
     }
 
-    inline std::wstring StringToWString(const std::string& str) { return std::wstring(str.begin(), str.end()); }
-    inline std::string WStringToString(const std::wstring& wstr) {
-    if (wstr.empty()) return "";
-    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
-    std::string result(sizeNeeded, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), result.data(), sizeNeeded, nullptr, nullptr);
-    return result;
-}
+    inline std::wstring StringToWString(const std::string& str) { return PalCore::Widen(str); }
+    inline std::string WStringToString(const std::wstring& wstr) { return PalCore::Narrow(wstr); }
     inline std::wstring FStringToWString(const FString& fstr) { const TCHAR* data = fstr.GetCharArray().GetData(); return data ? std::wstring(data) : L""; }
     inline std::wstring GuidToWString(const DynPalsGuid& Guid) { wchar_t buf[64]; swprintf(buf, 64, L"%08X%08X%08X%08X", Guid.A, Guid.B, Guid.C, Guid.D); return std::wstring(buf); }
 
@@ -206,14 +143,7 @@ namespace DynPals::Utils {
         auto* Class = Object->GetClassPrivate();
         if (!Class || !IsObjectValid(Class)) return nullptr;
 
-        Caches::CacheKey key{Class, std::wstring(PropertyName)}; // <--- FIX: std::wstring constructor
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::PropMutex);
-            if (Caches::PropCache.count(key)) return Caches::PropCache[key];
-        }
-        FProperty* Prop = Class->GetPropertyByNameInChain(PropertyName);
-        std::unique_lock<std::shared_mutex> write_lock(Caches::PropMutex);
-        return Caches::PropCache[key] = Prop;
+        return PalCore::FindProperty(Object, PropertyName);
     }
 
     template<typename T>
@@ -263,21 +193,7 @@ namespace DynPals::Utils {
         auto* Class = Object->GetClassPrivate();
         if (!Class || !IsObjectValid(Class)) return;
 
-        Caches::CacheKey key{Class, std::wstring(FunctionName)}; // <--- FIX: std::wstring constructor
-        UFunction* Function = nullptr;
-        {
-            std::shared_lock<std::shared_mutex> read_lock(Caches::FuncMutex);
-            if (Caches::FuncCache.count(key)) {
-                Function = Caches::FuncCache[key];
-                if (Function && IsObjectValid(Function)) SafeProcessEvent(Object, Function, Params);
-                return;
-            }
-        }
-        Function = Object->GetFunctionByNameInChain(FunctionName);
-        {
-            std::unique_lock<std::shared_mutex> write_lock(Caches::FuncMutex);
-            Caches::FuncCache[key] = Function;
-        }
+        UFunction* Function = PalCore::FindFunction(Object, FunctionName);
         if (Function && IsObjectValid(Function)) SafeProcessEvent(Object, Function, Params);
     }
 
@@ -379,24 +295,7 @@ namespace DynPals::Utils {
         }
     }
 
-    inline bool IsGameWindowFocused() {
-        static uint64_t lastCheckTick = 0;
-        static bool cachedResult = true;
-        uint64_t currentTick = GetTickCount64();
-        
-        if (currentTick - lastCheckTick > 100) {
-            lastCheckTick = currentTick;
-            HWND foregroundWindow = GetForegroundWindow();
-            if (!foregroundWindow) {
-                cachedResult = false;
-            } else {
-                DWORD foregroundProcId = 0;
-                GetWindowThreadProcessId(foregroundWindow, &foregroundProcId);
-                cachedResult = (foregroundProcId == GetCurrentProcessId());
-            }
-        }
-        return cachedResult;
-    }
+    inline bool IsGameWindowFocused() { return PalCore::GameHasFocus(); }
 
     inline bool WasKeyJustPressed(RC::Unreal::UObject* PlayerController, const std::wstring& KeyName) {
         if (!PlayerController || KeyName.empty() || KeyName == L"None") return false;

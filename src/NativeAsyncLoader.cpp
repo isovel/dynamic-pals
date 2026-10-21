@@ -435,7 +435,7 @@ namespace DynPals {
                     std::wstring correctPath = L"";
                     if (GetPathFunc) {
                         struct { UObject* Obj; FString RetVal; } Params{ Asset, FString() };
-                        KSL->ProcessEvent(GetPathFunc, &Params);
+                        Utils::SafeProcessEvent(KSL, GetPathFunc, &Params);
                         correctPath = Utils::FStringToWString(Params.RetVal);
                     }
 

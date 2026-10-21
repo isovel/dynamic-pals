@@ -2,7 +2,7 @@
 #include <Windows.h>
 #include "VFXManager.hpp"
 #include "Utils.hpp"
-#include "AsyncHelper.hpp"
+#include <PalCore/Runtime/GameThread.hpp>
 #include "NotificationManager.hpp"
 #include "json.hpp"
 #include <sstream>
@@ -339,13 +339,13 @@ namespace DynPals {
     void VFXManager::CycleNext() {
         if (VFXList.empty()) return;
         CurrentIndex = (CurrentIndex + 1) % VFXList.size();
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [this]() { SpawnCurrentPreview(); });
+        PalCore::GameThread::Tasks().Enqueue(this, [this]() { SpawnCurrentPreview(); });
     }
 
     void VFXManager::CyclePrevious() {
         if (VFXList.empty()) return;
         CurrentIndex = (CurrentIndex - 1 + VFXList.size()) % VFXList.size();
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [this]() { SpawnCurrentPreview(); });
+        PalCore::GameThread::Tasks().Enqueue(this, [this]() { SpawnCurrentPreview(); });
     }
 
     void VFXManager::Tick() {

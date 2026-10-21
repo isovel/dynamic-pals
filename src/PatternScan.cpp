@@ -1,5 +1,4 @@
-// --- START OF FILE src/AsyncHelper.cpp ---
-#include "AsyncHelper.hpp"
+#include "PatternScan.hpp"
 #include "DataTypes.hpp"
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Windows.h>
@@ -12,7 +11,7 @@ using namespace RC::Unreal;
 namespace DynPals {
 
     // Standalone, ultra-safe pattern scanner. Bypasses UE4SS locks completely!
-    std::vector<void*> AsyncHelper::FindMultiplePatterns(const std::string& patternStr) {
+    std::vector<void*> FindMultiplePatterns(const std::string& patternStr) {
         std::vector<void*> results;
         uint8_t* base = reinterpret_cast<uint8_t*>(GetModuleHandleA(NULL));
         if (!base) return results;
@@ -59,7 +58,7 @@ namespace DynPals {
         return results;
     }
 
-    void* AsyncHelper::FindPattern(const std::string& patternStr) {
+    void* FindPattern(const std::string& patternStr) {
         std::vector<void*> results = FindMultiplePatterns(patternStr);
 
         // Case 1: No match found
@@ -78,23 +77,5 @@ namespace DynPals {
         // Case 3: Exactly one unique match found (Success)
         return results[0];
     }
-
-    void AsyncHelper::Initialize() {
-        // Find the native AsyncTask function directly
-        AsyncTaskPtr = FindPattern("48 8B C4 41 54 41 57 48 81 EC B8 00 00 00 48 89 58 08");
-
-        if (AsyncTaskPtr) {
-            DP_LOG(Default,"Successfully resolved native AsyncTask pipeline.\n");
-        } else {
-            DP_LOG(Error,"CRITICAL: Failed to find AsyncTask signature!\n");
-        }
-    }
-
-    void AsyncHelper::AsyncTask(ENamedThreads Thread, const TUniqueFunction<void()>& Function) {
-        if (!AsyncTaskPtr) return;
-        
-        using AsyncTaskSig = void(*)(ENamedThreads, const TUniqueFunction<void()>&);
-        reinterpret_cast<AsyncTaskSig>(AsyncTaskPtr)(Thread, Function);
-    }
 }
-// --- END OF FILE src/AsyncHelper.cpp ---
+// --- END OF FILE src/PatternScan.cpp ---

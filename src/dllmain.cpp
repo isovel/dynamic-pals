@@ -9,7 +9,6 @@
 #include "SaveManager.hpp"
 #include "HooksManager.hpp"
 #include "Utils.hpp"
-#include "AsyncHelper.hpp"
 #include "VFXManager.hpp"
 #include "FileWatcher.hpp"
 #include "NativeAsyncLoader.hpp"
@@ -120,7 +119,6 @@ public:
         bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
         if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
 
-        DynPals::AsyncHelper::Initialize();
 
         // Register the listener safely
         GGCListener.Register();

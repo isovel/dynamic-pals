@@ -10,7 +10,8 @@
 #include <safetyhook.hpp>
 #include <thread>
 
-#include "AsyncHelper.hpp"
+#include <PalCore/Runtime/GameThread.hpp>
+#include "PatternScan.hpp"
 #include "HooksManager.hpp"
 #include "NotificationManager.hpp"
 #include "PalProcessor.hpp"
@@ -29,6 +30,9 @@ using namespace RC;
 using namespace RC::Unreal;
 
 namespace DynPals {
+    // Owner of this file's queued game-thread work.
+    static const char QueueTag = 0;
+
 
 static bool bCompletedInitReady = false;
 static UObject* LastPlayerController = nullptr;
@@ -520,7 +524,7 @@ static void OnClientRestart(UnrealScriptFunctionCallableContext& Context, void*)
                 std::thread([CapturedWorld = LastWorld]() {
                     std::this_thread::sleep_for(std::chrono::seconds(8)); 
 
-                    AsyncHelper::AsyncTask(ENamedThreads::GameThread, [CapturedWorld]() {
+                    PalCore::GameThread::Tasks().Enqueue(&QueueTag, [CapturedWorld]() {
                         DP_LOG(Default, "Settle period complete. Safely resolving player active party...\n");
 
                         NativeAsyncLoader::Initialize();
@@ -760,7 +764,7 @@ if (GetSkinIconAddr) {
         Hook_MasterWazaUpdate = safetyhook::create_inline(MasterWazaUpdateAddr, NativeMasterWazaUpdate_Hook);
     }
 
-    void* SetRankAddr = AsyncHelper::FindPattern("40 53 48 83 EC 20 48 8B D9 48 8B 89 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 75 ?? 48 8B D0 48 8B CB 48 83 C4 20 5B");
+    void* SetRankAddr = FindPattern("40 53 48 83 EC 20 48 8B D9 48 8B 89 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 75 ?? 48 8B D0 48 8B CB 48 83 C4 20 5B");
     if (SetRankAddr) {
         Hook_OnUpdateCharacterRank = safetyhook::create_inline(SetRankAddr, NativeOnUpdateCharacterRank_Hook);
     }

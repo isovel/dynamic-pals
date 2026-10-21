@@ -101,7 +101,7 @@ namespace DynPals {
     void UIManager::CacheScrollOffset() {
         if (MainScrollBoxObj && GetScrollOffsetFunc) {
             struct { float Offset; } Params{ 0.0f };
-            MainScrollBoxObj->ProcessEvent(GetScrollOffsetFunc, &Params);
+            Utils::SafeProcessEvent(MainScrollBoxObj, GetScrollOffsetFunc, &Params);
             LastScrollOffset = Params.Offset;
         }
     }
@@ -203,7 +203,7 @@ namespace DynPals {
             alignas(8) uint8_t SetViewParams[128] = {0};
             FProperty* TargetProp = SetViewTargetFunc->GetPropertyByNameInChain(STR("NewViewTarget"));
             if (TargetProp) *TargetProp->ContainerPtrToValuePtr<UObject*>(SetViewParams) = TargetPal;
-            CurrentPlayerController->ProcessEvent(SetViewTargetFunc, SetViewParams);
+            Utils::SafeProcessEvent(CurrentPlayerController, SetViewTargetFunc, SetViewParams);
             bIsPalCameraActive = true;
         }
     }
@@ -242,7 +242,7 @@ namespace DynPals {
             if (TargetProp) {
                 *TargetProp->ContainerPtrToValuePtr<UObject*>(Params) = OriginalViewTarget ? OriginalViewTarget : CurrentPlayerController;
             }
-            CurrentPlayerController->ProcessEvent(SetViewTargetFunc, Params);
+            Utils::SafeProcessEvent(CurrentPlayerController, SetViewTargetFunc, Params);
         }
 
         bIsPalCameraActive = false;
@@ -375,7 +375,7 @@ namespace DynPals {
         RC::Unreal::UFunction* GetViewTargetFunc = CurrentPlayerController->GetFunctionByNameInChain(STR("GetViewTarget")); 
         if (GetViewTargetFunc) {
             alignas(8) uint8_t Params[32] = {0};
-            CurrentPlayerController->ProcessEvent(GetViewTargetFunc, Params);
+            Utils::SafeProcessEvent(CurrentPlayerController, GetViewTargetFunc, Params);
             FProperty* RetProp = GetViewTargetFunc->GetPropertyByNameInChain(STR("ReturnValue"));
             if (RetProp) OriginalViewTarget = *RetProp->ContainerPtrToValuePtr<UObject*>(Params);
         }

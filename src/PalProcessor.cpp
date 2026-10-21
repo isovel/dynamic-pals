@@ -2,7 +2,7 @@
 #include "ConfigManager.hpp"
 #include "SaveManager.hpp"
 #include "Utils.hpp"
-#include "AsyncHelper.hpp"
+#include <PalCore/Runtime/GameThread.hpp>
 #include "VFXManager.hpp"
 #include "../include/NativeAsyncLoader.hpp"
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
@@ -16,6 +16,9 @@ using namespace RC;
 using namespace RC::Unreal;
 
 namespace DynPals {
+    // Owner of this file's queued game-thread work.
+    static const char QueueTag = 0;
+
 
 // =========================================================================
 // PROPERTY & REFLECTION CACHE
@@ -1447,7 +1450,7 @@ std::vector<UObject*> PalProcessor::GetLinkedPals(UObject* Character) {
 static void ScheduleProcessPal(UObject* Character, int DelayMs, bool ForceReroll, int ExplicitSwapIndex = -1, bool IsEvolutionEnd = false) {
 	std::thread([Character, DelayMs, ForceReroll, ExplicitSwapIndex, IsEvolutionEnd]() {
 		if (DelayMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(DelayMs));
-		AsyncHelper::AsyncTask(ENamedThreads::GameThread, [Character, ForceReroll, ExplicitSwapIndex, IsEvolutionEnd]() {
+		PalCore::GameThread::Tasks().Enqueue(&QueueTag, [Character, ForceReroll, ExplicitSwapIndex, IsEvolutionEnd]() {
 			if (!IsValidPalActor(Character)) return;
 			PalProcessor::Get().ProcessPal(Character, ForceReroll, ExplicitSwapIndex, false, IsEvolutionEnd);
 		});

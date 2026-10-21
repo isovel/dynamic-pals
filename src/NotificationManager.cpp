@@ -6,13 +6,16 @@
 #include "UI/UIBase.hpp"
 #include "UI/WidgetBuilder.hpp"
 #include "UI/Components/Button.hpp"
-#include "AsyncHelper.hpp"
+#include <PalCore/Runtime/GameThread.hpp>
 #include "Utils.hpp"
 #include <Unreal/FString.hpp>
 
 using namespace RC::Unreal;
 
 namespace DynPals {
+    // Owner of this file's queued game-thread work.
+    static const char QueueTag = 0;
+
 
     static UObject* GetActiveLogManager() {
         std::vector<UObject*> worlds;
@@ -109,7 +112,7 @@ namespace DynPals {
     }
 
     void NotificationManager::EnqueueToast(const std::wstring& Message, EPalLogPriority Priority, EPalLogContentToneType Tone) {
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [this, Message, Priority, Tone]() {
+        PalCore::GameThread::Tasks().Enqueue(this, [this, Message, Priority, Tone]() {
             if (!bIsReadyForToasts) {
                 std::lock_guard<std::mutex> lock(ToastMutex);
                 ToastQueue.push_back({Message, Priority, Tone});
@@ -124,7 +127,7 @@ namespace DynPals {
     }
 
     void NotificationManager::FlushQueuedToasts() {
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [this]() {
+        PalCore::GameThread::Tasks().Enqueue(this, [this]() {
             UObject* LogManager = GetActiveLogManager();
             if (!LogManager) {
                 DP_LOG(Verbose, "Failed to flush queued toasts: LogManager is still null.\n");
@@ -251,7 +254,7 @@ namespace DynPals {
 }
 
     void NotificationManager::ShowModalDialog(const std::wstring& Message) {
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [Message]() {
+        PalCore::GameThread::Tasks().Enqueue(&QueueTag, [Message]() {
             UObject* LogManager = GetActiveLogManager(); 
             UObject* WorldContext = LogManager ? LogManager->GetOuterPrivate() : nullptr;
             UObject* PlayerController = nullptr;
@@ -330,7 +333,7 @@ namespace DynPals {
             struct { UObject* WorldContext; UClass* WidgetType; UObject* OwningPlayer; UObject* ReturnValue; } CreateParams{
                 CurrentPlayerController, DialogClass, CurrentPlayerController, nullptr
             };
-            WBL->ProcessEvent(CreateFunc, &CreateParams);
+            Utils::SafeProcessEvent(WBL, CreateFunc, &CreateParams);
             MyWidget = CreateParams.ReturnValue;
             if (!MyWidget) return;
 
@@ -455,7 +458,7 @@ namespace DynPals {
         const std::wstring& RightBtnText, std::function<void()> OnRightClick,
         const std::wstring& LeftBtnText, std::function<void()> OnLeftClick
     ) {
-        AsyncHelper::AsyncTask(ENamedThreads::GameThread, [Message, RightBtnText, OnRightClick, LeftBtnText, OnLeftClick]() {
+        PalCore::GameThread::Tasks().Enqueue(&QueueTag, [Message, RightBtnText, OnRightClick, LeftBtnText, OnLeftClick]() {
             auto Modal = new TwoButtonModalUI(Message, RightBtnText, OnRightClick, LeftBtnText, OnLeftClick);
             Modal->RequestToggle();
         });

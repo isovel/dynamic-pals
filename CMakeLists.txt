@@ -25,7 +25,7 @@ set(COMMON_SRC_FILES
     "src/SaveManager.cpp"
     "src/PalProcessor.cpp"
     "src/NotificationManager.cpp" 
-    "src/AsyncHelper.cpp"
+    "src/PatternScan.cpp"
     "src/VFXManager.cpp"
     "src/FileWatcher.cpp"
     "src/safetyhook.cpp" 

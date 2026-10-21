@@ -1,7 +1,7 @@
 #include "FileWatcher.hpp"
 #include "ConfigManager.hpp"
 #include "PalProcessor.hpp"
-#include "AsyncHelper.hpp"
+#include <PalCore/Runtime/GameThread.hpp>
 #include "NotificationManager.hpp"
 #include "DataTypes.hpp"
 #include "UI/Views/UIManager.hpp" 
@@ -14,6 +14,9 @@
 using namespace RC::Unreal;
 
 namespace DynPals {
+    // Owner of this file's queued game-thread work.
+    static const char QueueTag = 0;
+
 
     static void WatchDirectoryThread(std::wstring directoryPath) {
         HANDLE hDir = CreateFileW(
@@ -81,7 +84,7 @@ namespace DynPals {
                     // Debounce: Give the OS/Editor 500ms to finish the physical file write
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-                    AsyncHelper::AsyncTask(ENamedThreads::GameThread, []() {
+                    PalCore::GameThread::Tasks().Enqueue(&QueueTag, []() {
                         // 1. Instantly clear old error notifications from the screen
                         NotificationManager::Get().ClearInGameLogs();
 
