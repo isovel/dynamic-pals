@@ -909,8 +909,15 @@ namespace DynPals {
         }
         EndPack();
 
-        Built(S->Settings.AddButton("Reroll Pal", [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; }), "Button");
-        Built(S->Settings.AddButton("Reset Pal", [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } }), "Button");
+        auto Reroll = [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; };
+        auto Reset = [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } };
+        const PalUI::Client::Row Actions = S->Settings.AddButtons({{"Reroll Pal"}, {"Reset Pal", PalUI::ButtonTone::Warning}},
+            [Reroll, Reset](std::size_t Index) { Index == 0 ? Reroll() : Reset(); });
+        // A PalUI older than the button row refuses it; one button per row then.
+        if (!Actions.IsValid()) {
+            Built(S->Settings.AddButton("Reroll Pal", Reroll), "Button");
+            Built(S->Settings.AddButton("Reset Pal", Reset), "Button");
+        }
         Built(S->Settings.AddSwitch("Hide Invalid", bHideInvalidSwaps, [this](bool bState) { bHideInvalidSwaps = bState; bNeedsRefresh = true; }), "Switch");
         Built(S->Settings.AddSwitch("Focus Pal Camera", SaveManager::Get().Settings.bFocusPal, [this](bool bState) {
             SaveManager::Get().Settings.bFocusPal = bState; SaveManager::Get().SaveWorldData();
