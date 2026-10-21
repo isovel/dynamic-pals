@@ -64,6 +64,7 @@ namespace DynPals {
         void Close();
         void OnClosed();
         void Fill();
+        bool IsTargetLocked();
         void FillSettings();
         void FillPreferences();
         void StartKeyCapture(int Target);

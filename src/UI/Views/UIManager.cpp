@@ -34,6 +34,8 @@ namespace DynPals {
         std::optional<PalUI::Client::Dialog> Choice;
         std::deque<std::pair<std::wstring, std::function<void(bool)>>> Choices;
         bool bCloseRequested = false;
+        // PalUI takes one title bar per build, so a changed lock state rebuilds the window.
+        bool bShownLocked = false;
     };
 
     UIManager::UIManager() : S(std::make_unique<State>()) {}
@@ -580,6 +582,11 @@ namespace DynPals {
         CurrentPlayerController = nullptr;
     }
 
+    bool UIManager::IsTargetLocked() {
+        PalPersistData* Persist = SaveManager::Get().GetPersistData(TargetInstanceID);
+        return Persist && Persist->bIsManuallyLocked;
+    }
+
     void UIManager::Fill() {
         S->Settings = S->Window->AddTab("Settings");
         S->Prefs = S->Window->AddTab("Preferences");
@@ -594,9 +601,8 @@ namespace DynPals {
             S->bCloseRequested = true;
         });
 
-        PalPersistData* currentPersist = SaveManager::Get().GetPersistData(TargetInstanceID);
-        const bool bLocked = currentPersist && currentPersist->bIsManuallyLocked;
-        S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), bLocked ? "LOCKED" : "");
+        S->bShownLocked = IsTargetLocked();
+        S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), S->bShownLocked ? "LOCKED" : "");
         S->Window->SelectTab(0);
     }
 
@@ -1067,11 +1073,8 @@ namespace DynPals {
 
         if (bNeedsRefresh) {
             bNeedsRefresh = false;
-            if (S->Settings.Clear()) {
+            if (IsTargetLocked() == S->bShownLocked && S->Settings.Clear()) {
                 FillSettings();
-                PalPersistData* currentPersist = SaveManager::Get().GetPersistData(TargetInstanceID);
-                const bool bLocked = currentPersist && currentPersist->bIsManuallyLocked;
-                S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), bLocked ? "LOCKED" : "");
             } else if (S->Window->Reset()) {
                 Fill();
             } else {
