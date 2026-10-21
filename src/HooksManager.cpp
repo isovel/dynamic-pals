@@ -399,7 +399,6 @@ static void OnWidgetAddedToViewport(UnrealScriptFunctionCallableContext& Context
         GCachedModActorClass = nullptr;
 
         SaveManager::Get().Reset();
-        NotificationManager::Get().SetReady(false);
         PalProcessor::Get().ClearAllSwappedStatus();
         UIRegistry::Get().InvalidateAllUIs();
         Utils::Caches::ClearAll(); 
@@ -419,7 +418,6 @@ static void OnOpenLevel(UnrealScriptFunctionCallableContext& Context, void*) {
     LastWorld = nullptr;
     GCachedModActorClass = nullptr;
 
-    NotificationManager::Get().SetReady(false);
     UIRegistry::Get().InvalidateAllUIs();
     Utils::Caches::ClearAll(); 
     NativeAsyncLoader::ClearCache(); 
@@ -501,7 +499,6 @@ static void OnClientRestart(UnrealScriptFunctionCallableContext& Context, void*)
                 // FIX: Wipe session statics!
                 GCachedModActorClass = nullptr;
 
-                NotificationManager::Get().SetReady(false);
                 SaveManager::Get().Reset();
                 PalProcessor::Get().ClearAllSwappedStatus();
                 Utils::Caches::ClearAll(); 
@@ -513,7 +510,6 @@ static void OnClientRestart(UnrealScriptFunctionCallableContext& Context, void*)
                 // FIX: Wipe session statics!
                 GCachedModActorClass = nullptr;
 
-                NotificationManager::Get().SetReady(false);
                 SaveManager::Get().Reset();
                 PalProcessor::Get().ClearAllSwappedStatus();
                 Utils::Caches::ClearAll(); 
@@ -556,8 +552,6 @@ static void OnClientRestart(UnrealScriptFunctionCallableContext& Context, void*)
                         std::wstring verStr = GetFormattedVersionString();
                         DP_LOG(Normal, "Welcome to dynamic pals {} - Experimental", verStr);
 
-                        NotificationManager::Get().SetReady(true);
-                        NotificationManager::Get().FlushQueuedToasts();
 
                         CheckAndWarnConflictingMods();
                     });

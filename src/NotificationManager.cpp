@@ -7,6 +7,8 @@
 #include "UI/WidgetBuilder.hpp"
 #include "UI/Components/Button.hpp"
 #include <PalCore/Runtime/GameThread.hpp>
+#include <PalCore/Runtime/Pal.hpp>
+#include <PalCore/Runtime/Toast.hpp>
 #include "Utils.hpp"
 #include <Unreal/FString.hpp>
 
@@ -15,81 +17,6 @@ using namespace RC::Unreal;
 namespace DynPals {
     // Owner of this file's queued game-thread work.
     static const char QueueTag = 0;
-
-
-    static UObject* GetActiveLogManager() {
-        std::vector<UObject*> worlds;
-        UObjectGlobals::FindAllOf(STR("World"), worlds);
-        if (worlds.empty()) return nullptr;
-
-        UObject* PalUtil = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Pal.Default__PalUtility"));
-        if (!PalUtil) return nullptr;
-
-        UFunction* GetLogFunc = PalUtil->GetFunctionByNameInChain(STR("GetLogManager"));
-        if (!GetLogFunc) return nullptr;
-
-        for (UObject* World : worlds) {
-            if (!World) continue;
-
-            UClass* Class = World->GetClassPrivate();
-            if (Class && Class->GetName() == L"World" && World->GetName().find(L"Default__") == std::wstring::npos) {
-                struct { UObject* WorldCtx; UObject* LogMgr; } GetLogParams{World, nullptr};
-                PalUtil->ProcessEvent(GetLogFunc, &GetLogParams);
-                
-                if (GetLogParams.LogMgr) {
-                    return GetLogParams.LogMgr;
-                }
-            }
-        }
-        return nullptr;
-    }
-
-    static void ShowToastDirectWithLogManager(UObject* LogManager, const std::wstring& Message, EPalLogPriority Priority, EPalLogContentToneType Tone) {
-        UFunction* AddLogFunc = LogManager->GetFunctionByNameInChain(STR("AddLog"));
-        if (!AddLogFunc) return;
-
-        alignas(8) uint8_t Params[256] = {0};
-
-        // 1. Initialize ALL parameters
-        for (FProperty* Prop = (FProperty*)AddLogFunc->GetChildProperties(); Prop; Prop = (FProperty*)Utils::GetNextField(Prop)) {
-            Prop->InitializeValue_InContainer(Params);
-        }
-
-        FProperty* PriorityProp = AddLogFunc->GetPropertyByNameInChain(STR("logPriority"));
-        if (!PriorityProp) PriorityProp = AddLogFunc->GetPropertyByNameInChain(STR("Priority"));
-        if (PriorityProp) {
-            *PriorityProp->ContainerPtrToValuePtr<uint8_t>(Params) = static_cast<uint8_t>(Priority);
-        }
-
-        FProperty* TextProp = AddLogFunc->GetPropertyByNameInChain(STR("LogText"));
-        if (!TextProp) TextProp = AddLogFunc->GetPropertyByNameInChain(STR("Text"));
-        if (TextProp) {
-            Utils::AssignStringToTextProperty(Message, Params, TextProp);
-        }
-
-        FProperty* AddDataProp = AddLogFunc->GetPropertyByNameInChain(STR("logAdditionalData"));
-        if (!AddDataProp) AddDataProp = AddLogFunc->GetPropertyByNameInChain(STR("AdditionalData"));
-        if (AddDataProp) {
-            void* AddDataPtr = AddDataProp->ContainerPtrToValuePtr<void>(Params);
-            FStructProperty* StructProp = CastField<FStructProperty>(AddDataProp);
-            if (StructProp && StructProp->GetStruct()) {
-                FProperty* ToneProp = StructProp->GetStruct()->GetPropertyByNameInChain(STR("logToneType"));
-                if (!ToneProp) ToneProp = StructProp->GetStruct()->GetPropertyByNameInChain(STR("LogToneType"));
-                if (ToneProp) {
-                    *ToneProp->ContainerPtrToValuePtr<uint8_t>(AddDataPtr) = static_cast<uint8_t>(Tone);
-                }
-            }
-        }
-
-        Utils::SafeProcessEvent(LogManager, AddLogFunc, Params);
-
-        // 2. Destroy ALL parameters
-        for (FProperty* Prop = (FProperty*)AddLogFunc->GetChildProperties(); Prop; Prop = (FProperty*)Utils::GetNextField(Prop)) {
-            Prop->DestroyValue_InContainer(Params);
-        }
-    }
-
-
 
 
     static void SetCommonButtonText(UObject* CommonButtonObj, const std::wstring& TextStr) {
@@ -112,53 +39,13 @@ namespace DynPals {
     }
 
     void NotificationManager::EnqueueToast(const std::wstring& Message, EPalLogPriority Priority, EPalLogContentToneType Tone) {
-        PalCore::GameThread::Tasks().Enqueue(this, [this, Message, Priority, Tone]() {
-            if (!bIsReadyForToasts) {
-                std::lock_guard<std::mutex> lock(ToastMutex);
-                ToastQueue.push_back({Message, Priority, Tone});
-                return;
-            }
-
-            UObject* LogManager = GetActiveLogManager();
-            if (LogManager) {
-                ShowToastDirectWithLogManager(LogManager, Message, Priority, Tone);
-            }
-        });
-    }
-
-    void NotificationManager::FlushQueuedToasts() {
-        PalCore::GameThread::Tasks().Enqueue(this, [this]() {
-            UObject* LogManager = GetActiveLogManager();
-            if (!LogManager) {
-                DP_LOG(Verbose, "Failed to flush queued toasts: LogManager is still null.\n");
-                return;
-            }
-
-            std::vector<PendingToast> ToastsToFlush;
-            {
-                std::lock_guard<std::mutex> lock(ToastMutex);
-                bIsReadyForToasts = true;
-                ToastsToFlush = std::move(ToastQueue);
-                ToastQueue.clear();
-            }
-
-            for (const auto& toast : ToastsToFlush) {
-                ShowToastDirectWithLogManager(LogManager, toast.Message, toast.Priority, toast.Tone);
-            }
-
-            DP_LOG(Verbose, "Dispatched {} queued messages.", ToastsToFlush.size());
-        });
+        const PalCore::Priority Rank = Priority == EPalLogPriority::None ? PalCore::Priority::Normal : static_cast<PalCore::Priority>(Priority);
+        PalCore::Toast(Message, static_cast<PalCore::Tone>(Tone), Rank);
     }
 
     void NotificationManager::ClearInGameLogs() {
-    // 1. Clear any pending toasts in the C++ queue
-    {
-        std::lock_guard<std::mutex> lock(ToastMutex);
-        ToastQueue.clear();
-    }
-
     // 2. Remove all VeryImportant logs from the native PalLogManager subsystem
-    UObject* LogManager = GetActiveLogManager();
+    UObject* LogManager = PalCore::LogManager();
     if (LogManager && Utils::IsObjectValid(LogManager)) {
         UFunction* RemoveVeryImportantFunc = LogManager->GetFunctionByNameInChain(STR("RemoveVeryImportantLog"));
         
@@ -255,7 +142,7 @@ namespace DynPals {
 
     void NotificationManager::ShowModalDialog(const std::wstring& Message) {
         PalCore::GameThread::Tasks().Enqueue(&QueueTag, [Message]() {
-            UObject* LogManager = GetActiveLogManager(); 
+            UObject* LogManager = PalCore::LogManager(); 
             UObject* WorldContext = LogManager ? LogManager->GetOuterPrivate() : nullptr;
             UObject* PlayerController = nullptr;
 
