@@ -25,6 +25,9 @@ namespace DynPals {
         std::filesystem::file_time_type Modified;
     };
 
+    // Degrees turned by a drag of DeltaUnits slate units, at half a degree each, wrapped into [0, 360).
+    double TurnedRotation(double Degrees, double DeltaUnits);
+
     // The most recently modified Prefix*.json among Files, or empty.
     std::wstring NewestWorldSave(const std::vector<SaveCandidate>& Files, std::wstring_view Prefix);
 }

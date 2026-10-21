@@ -103,3 +103,12 @@ TEST_CASE("the newest world save is the one the import reads")
     CHECK(NewestWorldSave(Files, L"_DynPals_Save_") == L"/m/_DynPals_Save_B.json");
     CHECK(NewestWorldSave({}, L"_DynPals_Save_").empty());
 }
+
+TEST_CASE("a dragged rotation wraps into one turn")
+{
+    CHECK(DynPals::TurnedRotation(359.0, 4.0) == 1.0);
+    CHECK(DynPals::TurnedRotation(1.0, -4.0) == 359.0);
+    CHECK(DynPals::TurnedRotation(0.0, 720.0) == 0.0);
+    CHECK(DynPals::TurnedRotation(90.0, 0.0) == 90.0);
+    CHECK(DynPals::TurnedRotation(0.0, -1e-14) < 360.0);
+}

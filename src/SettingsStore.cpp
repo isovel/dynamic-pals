@@ -1,3 +1,4 @@
+#include <cmath>
 #include "SettingsStore.hpp"
 
 #include "json.hpp"
@@ -54,5 +55,12 @@ namespace DynPals {
             if (!Newest || File.Modified > Newest->Modified) Newest = &File;
         }
         return Newest ? Newest->Path : std::wstring();
+    }
+
+    double TurnedRotation(double Degrees, double DeltaUnits) {
+        const double Turned = std::fmod(Degrees + DeltaUnits * 0.5, 360.0);
+        const double Wrapped = Turned < 0.0 ? Turned + 360.0 : Turned;
+        // A tiny negative remainder rounds up to 360 when wrapped.
+        return Wrapped >= 360.0 ? 0.0 : Wrapped;
     }
 }
