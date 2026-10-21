@@ -2,11 +2,12 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <Unreal/UObjectGlobals.hpp>
 
-namespace PalUI::Client { class Connection; }
+namespace PalUI::Client { class Connection; class Row; }
 
 namespace DynPals {
 
@@ -48,6 +49,11 @@ namespace DynPals {
         std::unique_ptr<State> S;
         PalUI::Client::Connection* UI = nullptr;
         bool bWarnedMissing = false;
+        std::set<std::string> LoggedKinds;
+
+        void WarnMissing();
+        // Row, logging once per kind when PalUI could not build it.
+        PalUI::Client::Row Built(PalUI::Client::Row Row, const char* Kind);
 
         bool Open();
         void Close();

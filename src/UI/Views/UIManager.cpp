@@ -440,12 +440,22 @@ namespace DynPals {
         return S->Window && S->Window->IsOpen();
     }
 
+    void UIManager::WarnMissing() {
+        if (bWarnedMissing) return;
+        bWarnedMissing = true;
+        NotificationManager::Get().EnqueueToast(L"The DynamicPals menu needs the PalUI mod", EPalLogPriority::Important, EPalLogContentToneType::Negative);
+    }
+
+    PalUI::Client::Row UIManager::Built(PalUI::Client::Row Row, const char* Kind) {
+        if (!Row.IsValid() && LoggedKinds.insert(Kind).second) {
+            DP_LOG(Warning, "PalUI could not build a {} row; the installed PalUI may be older than this build expects.", Utils::StringToWString(Kind));
+        }
+        return Row;
+    }
+
     void UIManager::Toggle(RC::Unreal::UObject* PlayerController) {
         if (!UI) {
-            if (!bWarnedMissing) {
-                bWarnedMissing = true;
-                NotificationManager::Get().EnqueueToast(L"The DynamicPals menu needs the PalUI mod", EPalLogPriority::Important, EPalLogContentToneType::Negative);
-            }
+            WarnMissing();
             return;
         }
         if (IsMenuOpen()) {
@@ -473,7 +483,8 @@ namespace DynPals {
         S->Window->SetSize(650.0, 760.0);
         if (!S->Window->Open()) {
             S->Window.reset();
-            DP_LOG(Warning, "PalUI did not open the menu window.");
+            DP_LOG(Warning, "PalUI did not open the menu window; is the PalUI mod enabled?");
+            WarnMissing();
             return false;
         }
 
@@ -576,12 +587,12 @@ namespace DynPals {
 
     void UIManager::FillPreferences() {
         auto& Settings = SaveManager::Get().Settings;
-        S->Prefs.AddHeader("Global Keybinds");
-        S->Prefs.AddLabelWithButton("Main Menu Toggle", Utils::WStringToString(FormatKeybindText(Settings.MenuModifier, Settings.MenuKey)),
-                                    [this]() { StartKeyCapture(0); });
-        S->Prefs.AddLabelWithButton("Direct Reroll Pal", Utils::WStringToString(FormatKeybindText(Settings.RerollModifier, Settings.RerollKey)),
-                                    [this]() { StartKeyCapture(2); });
-        S->CaptureRow = S->Prefs.AddLabel("");
+        Built(S->Prefs.AddHeader("Global Keybinds"), "Header");
+        Built(S->Prefs.AddLabelWithButton("Main Menu Toggle", Utils::WStringToString(FormatKeybindText(Settings.MenuModifier, Settings.MenuKey)),
+                                    [this]() { StartKeyCapture(0); }), "LabelWithButton");
+        Built(S->Prefs.AddLabelWithButton("Direct Reroll Pal", Utils::WStringToString(FormatKeybindText(Settings.RerollModifier, Settings.RerollKey)),
+                                    [this]() { StartKeyCapture(2); }), "LabelWithButton");
+        S->CaptureRow = Built(S->Prefs.AddLabel(""), "Label");
     }
 
     void UIManager::StartKeyCapture(int Target) {
@@ -825,7 +836,7 @@ namespace DynPals {
 
 
         // 3. Swap picker: one choice row per pack.
-        S->Settings.AddHeader("Current Swap");
+        Built(S->Settings.AddHeader("Current Swap"), "Header");
         std::vector<std::string> Labels;
         std::vector<int> Configs;
         std::wstring PackName;
@@ -836,15 +847,15 @@ namespace DynPals {
                 if (Configs[i] == persistConfigIndex) Selected = i;
             }
             const std::size_t Pack = S->PackRows.size();
-            S->Settings.AddHeader(Utils::WStringToString(PackName));
-            S->PackRows.push_back(S->Settings.AddChoices(Labels, Selected, [this, Pack](std::size_t Index) {
+            Built(S->Settings.AddHeader(Utils::WStringToString(PackName)), "Header");
+            S->PackRows.push_back(Built(S->Settings.AddChoices(Labels, Selected, [this, Pack](std::size_t Index) {
                 if (Pack >= S->PackConfigs.size() || Index >= S->PackConfigs[Pack].size()) return;
                 PalProcessor::Get().ForceSwap(TargetPal, S->PackConfigs[Pack][Index]);
                 for (std::size_t Other = 0; Other < S->PackRows.size(); ++Other) {
                     if (Other != Pack) S->PackRows[Other].SetIndex(std::nullopt);
                 }
                 bNeedsRefresh = true;
-            }));
+            }), "Choices"));
             S->PackConfigs.push_back(Configs);
             Labels.clear();
             Configs.clear();
@@ -856,7 +867,7 @@ namespace DynPals {
                 if (Option.rfind(L"[ ", 0) == 0) {
                     PackName = Option.substr(2, Option.size() >= 4 ? Option.size() - 4 : 0);
                 } else {
-                    S->Settings.AddLabel(Utils::WStringToString(Option.substr(Option.find_first_not_of(L' '))));
+                    Built(S->Settings.AddLabel(Utils::WStringToString(Option.substr(Option.find_first_not_of(L' ')))), "Label");
                 }
                 continue;
             }
@@ -865,27 +876,27 @@ namespace DynPals {
         }
         EndPack();
 
-        S->Settings.AddButton("Reroll Pal", [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; });
-        S->Settings.AddButton("Reset Pal", [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } });
-        S->Settings.AddSwitch("Hide Invalid", bHideInvalidSwaps, [this](bool bState) { bHideInvalidSwaps = bState; bNeedsRefresh = true; });
-        S->Settings.AddSwitch("Focus Pal Camera", SaveManager::Get().Settings.bFocusPal, [this](bool bState) {
+        Built(S->Settings.AddButton("Reroll Pal", [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; }), "Button");
+        Built(S->Settings.AddButton("Reset Pal", [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } }), "Button");
+        Built(S->Settings.AddSwitch("Hide Invalid", bHideInvalidSwaps, [this](bool bState) { bHideInvalidSwaps = bState; bNeedsRefresh = true; }), "Switch");
+        Built(S->Settings.AddSwitch("Focus Pal Camera", SaveManager::Get().Settings.bFocusPal, [this](bool bState) {
             SaveManager::Get().Settings.bFocusPal = bState; SaveManager::Get().SaveWorldData();
             if (bState) EnablePalCamera(); else DisablePalCamera();
             bNeedsRefresh = true; 
-        });
+        }), "Switch");
 
         // 5. Camera Controls (Relative Switch + Rotation Slider)
         if (SaveManager::Get().Settings.bFocusPal) {
-            S->Settings.AddSwitch("Relative Camera", SaveManager::Get().Settings.bRelativeCamera, [this](bool bState) {
+            Built(S->Settings.AddSwitch("Relative Camera", SaveManager::Get().Settings.bRelativeCamera, [this](bool bState) {
                 SaveManager::Get().Settings.bRelativeCamera = bState;
                 SaveManager::Get().SaveWorldData();
                 UpdatePalCameraRotation(SaveManager::Get().Settings.CameraRotation);
-            });
-            S->Settings.AddSlider("Camera Rotation", SaveManager::Get().Settings.CameraRotation, 0.0, 360.0, [this](double NewValue) {
+            }), "Switch");
+            Built(S->Settings.AddSlider("Camera Rotation", SaveManager::Get().Settings.CameraRotation, 0.0, 360.0, [this](double NewValue) {
                 SaveManager::Get().Settings.CameraRotation = NewValue;
                 UpdatePalCameraRotation(NewValue);
                 TriggerSaveDebounced(); // <--- Debounce disk write!
-            });
+            }), "Slider");
         }
 
         // 6. Dynamic Size Slider
@@ -894,10 +905,10 @@ namespace DynPals {
             if (activeCfg.MinSizeMultiplier < activeCfg.MaxSizeMultiplier) {
                 double currentVal = currentPersist->SizeMultiplier > 0.0 ? currentPersist->SizeMultiplier : 1.0;
                 currentVal = std::clamp(currentVal, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier);
-                S->Settings.AddSlider("Size Adjustment", currentVal, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier, [this](double NewValue) {
+                Built(S->Settings.AddSlider("Size Adjustment", currentVal, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier, [this](double NewValue) {
                     ApplySize(NewValue);
                     TriggerSaveDebounced(); // <--- Debounce disk write!
-                });
+                }), "Slider");
             }
         }
 
@@ -905,14 +916,14 @@ namespace DynPals {
         if (currentPersist && persistConfigIndex != -1) {
             auto& activeCfg = ConfigManager::Get().GetConfigs()[persistConfigIndex];
             if (!activeCfg.MorphTargetList.empty()) {
-                S->Settings.AddHeader("Morph Targets");
+                Built(S->Settings.AddHeader("Morph Targets"), "Header");
                 for (auto& morph : activeCfg.MorphTargetList) {
                     if (morph.type != L"Restrict" && morph.minVal < morph.maxVal) {
                         const double currentVal = currentPersist->MorphSet[morph.target];
-                        S->Settings.AddSlider(Utils::WStringToString(morph.target), currentVal, morph.minVal, morph.maxVal, [this, MorphName = morph.target](double NewValue) {
+                        Built(S->Settings.AddSlider(Utils::WStringToString(morph.target), currentVal, morph.minVal, morph.maxVal, [this, MorphName = morph.target](double NewValue) {
                             ApplyMorph(MorphName, NewValue);
                             TriggerSaveDebounced(); // <--- Debounce disk write!
-                        });
+                        }), "Slider");
                     }
                 }
             }
@@ -922,19 +933,19 @@ namespace DynPals {
         if (currentPersist && currentPersist->SizeMultiplier > 0.0 && std::abs(currentPersist->SizeMultiplier - 1.0) > 0.005) {
             wchar_t sizeBuf[32];
             swprintf(sizeBuf, 32, L"Size Modifier: %.2fx", currentPersist->SizeMultiplier);
-            S->Settings.AddLabel(Utils::WStringToString(sizeBuf));
+            Built(S->Settings.AddLabel(Utils::WStringToString(sizeBuf)), "Label");
         }
         
-        S->Settings.AddHeader("Matchmaker Log");
+        Built(S->Settings.AddHeader("Matchmaker Log"), "Header");
 
         if (evaluations.empty()) {
-            S->Settings.AddLabel(Utils::WStringToString(L"No swaps configured for this Pal."));
+            Built(S->Settings.AddLabel(Utils::WStringToString(L"No swaps configured for this Pal.")), "Label");
         } else {
             for (const auto& eval : evaluations) {
                 if (bHideInvalidSwaps && !eval.IsValid) continue;
 
                 auto& cfg = ConfigManager::Get().GetConfigs()[eval.ConfigIndex];
-                S->Settings.AddLabel(Utils::WStringToString(cfg.PackName));
+                Built(S->Settings.AddLabel(Utils::WStringToString(cfg.PackName)), "Label");
 
                 // --- 1. Prioritize SwapLabel ---
                 std::wstring displayLabel = StripFallbackHash(cfg.SwapLabel);
@@ -978,7 +989,7 @@ namespace DynPals {
                         logStr += L" (" + eval.RejectionReason + L")";
                     }
                 }
-                S->Settings.AddLabel(Utils::WStringToString(logStr));
+                Built(S->Settings.AddLabel(Utils::WStringToString(logStr)), "Label");
             }
         }
 
@@ -1030,6 +1041,8 @@ namespace DynPals {
                 S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), bLocked ? "LOCKED" : "");
             } else if (S->Window->Reset()) {
                 Fill();
+            } else {
+                DP_LOG(Warning, "PalUI could not clear the menu for a refresh; reopen it to see the change.");
             }
         }
     }

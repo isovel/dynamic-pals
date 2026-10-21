@@ -122,7 +122,6 @@ public:
     {
         bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
         if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
-        ConfigPoll = PalCore::GameThread::Tasks().AddFrameCallback([](float) { DynPals::SaveManager::Get().TickConfig(); });
 
         UI.emplace("DynamicPals", [](std::uint8_t, std::string_view Context, std::string_view Message) {
             DP_LOG(Warning, "[PalUI] {}: {}", DynPals::Utils::StringToWString(std::string(Context)), DynPals::Utils::StringToWString(std::string(Message)));
@@ -144,6 +143,8 @@ public:
             std::wstring BasePath = DynPals::Utils::FStringToWString(ContentDir);
 
             DynPals::SaveManager::Get().Initialize(BasePath);
+            // After Initialize: ConfigFile is driven from one thread, and this runs on UE4SS's.
+            ConfigPoll = PalCore::GameThread::Tasks().AddFrameCallback([](float) { DynPals::SaveManager::Get().TickConfig(); });
             DynPals::ConfigManager::Get().Initialize(BasePath);
             DynPals::FileWatcher::Start(BasePath + L"Paks/~mods/");
             DynPals::VFXManager::Get().Initialize(); 

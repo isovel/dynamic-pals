@@ -445,7 +445,7 @@ static void OnSessionUnloading() {
 }
 
 static void OnSettled() {
-    DP_LOG(Default, "Settle period complete. Safely resolving player active party...\n");
+    DP_LOG(Default, "Settle period complete with {} party handles. Safely resolving player active party...\n", PalCore::PartyHandles().size());
 
     NativeAsyncLoader::Initialize();
 
