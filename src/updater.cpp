@@ -3,7 +3,7 @@
 #include <wininet.h>
 #include <fmt/xchar.h> // Enable wide-character formatting support for {fmt}
 
-#include "Updater.hpp"
+#include "updater.hpp"
 #include "Utils.hpp"
 #include "NotificationManager.hpp" 
 #include <DynamicOutput/DynamicOutput.hpp>

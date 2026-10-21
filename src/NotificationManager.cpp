@@ -409,7 +409,7 @@ namespace DynPals {
                 if (RightBtnObj) {
                     SetCommonButtonText(RightBtnObj, RightText);
                     
-                    RightBtnCtrl = std::make_unique<UI::Button>(RightBtnObj);
+                    RightBtnCtrl = std::make_unique<class UI::Button>(RightBtnObj);
                     auto action = OnRightClick;
                     RightBtnCtrl->OnClicked([this, action]() {
                         if (action) action();
@@ -421,7 +421,7 @@ namespace DynPals {
                 if (LeftBtnObj) {
                     SetCommonButtonText(LeftBtnObj, LeftText);
 
-                    LeftBtnCtrl = std::make_unique<UI::Button>(LeftBtnObj);
+                    LeftBtnCtrl = std::make_unique<class UI::Button>(LeftBtnObj);
                     auto action = OnLeftClick;
                     LeftBtnCtrl->OnClicked([this, action]() {
                         if (action) action();
@@ -446,8 +446,8 @@ namespace DynPals {
         std::wstring LeftText;
         std::function<void()> OnLeftClick;
 
-        std::unique_ptr<UI::Button> RightBtnCtrl;
-        std::unique_ptr<UI::Button> LeftBtnCtrl;
+        std::unique_ptr<class UI::Button> RightBtnCtrl;
+        std::unique_ptr<class UI::Button> LeftBtnCtrl;
     };
 
     void NotificationManager::ShowTwoButtonModal(

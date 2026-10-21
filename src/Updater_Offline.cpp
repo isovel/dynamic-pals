@@ -1,4 +1,4 @@
-#include "Updater.hpp"
+#include "updater.hpp"
 
 namespace DynPals {
     void Updater::CheckForUpdates() {

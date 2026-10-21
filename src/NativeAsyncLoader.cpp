@@ -1,3 +1,5 @@
+#define NOMINMAX
+#include <Windows.h>
 #include "../include/NativeAsyncLoader.hpp"
 #include "Utils.hpp"
 #include "DataTypes.hpp"
@@ -9,7 +11,6 @@
 #include <chrono>
 #include <algorithm>
 #include <filesystem>
-#include <Windows.h>
 
 using namespace RC::Unreal;
 

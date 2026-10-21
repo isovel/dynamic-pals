@@ -686,9 +686,9 @@ namespace DynPals {
         Tab1Widget = Tab1Builder.Build();
         Tab2Widget = Tab2Builder.Build();
 
-        TabBtn1 = std::make_unique<UI::Button>(Tab1Widget);
+        TabBtn1 = std::make_unique<class UI::Button>(Tab1Widget);
         TabBtn1->OnClicked([this]() { SwitchTab(0); });
-        TabBtn2 = std::make_unique<UI::Button>(Tab2Widget);
+        TabBtn2 = std::make_unique<class UI::Button>(Tab2Widget);
         TabBtn2->OnClicked([this]() { SwitchTab(1); });
 
         TabLayout.AddToHorizontalBox(Tab1Builder, [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 10, 0); })
@@ -726,11 +726,11 @@ namespace DynPals {
         });
 
         UObject* RerollBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget).Text(L"      Reroll Pal      ").BackgroundColor(PalBlue).DesiredSizeOverride(300.0f, 45.0f).UnlockButtonSize(300.0f).Build();
-        RerollButton = std::make_unique<UI::Button>(RerollBtnObj);
+        RerollButton = std::make_unique<class UI::Button>(RerollBtnObj);
         RerollButton->OnClicked([this]() { PalProcessor::Get().ProcessPal(TargetPal, true); CacheScrollOffset(); bNeedsRefresh = true; });
 
         UObject* ResetBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget).Text(L"      Reset Pal      ").BackgroundColor(FLinearColor_UE5{0.85f, 0.25f, 0.25f, 1.0f}).DesiredSizeOverride(300.0f, 45.0f).UnlockButtonSize(300.0f).Build();
-        ResetButton = std::make_unique<UI::Button>(ResetBtnObj);
+        ResetButton = std::make_unique<class UI::Button>(ResetBtnObj);
         ResetButton->OnClicked([this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); CacheScrollOffset(); bNeedsRefresh = true; } });
 
         auto SettingsBuilder = UI::VerticalBox(MyWidget);
@@ -765,7 +765,7 @@ namespace DynPals {
             .DesiredSizeOverride(200.0f, 45.0f)
             .UnlockButtonSize(200.0f)
             .Build();
-        BindMenuBtn = std::make_unique<UI::Button>(MenuBtnObj);
+        BindMenuBtn = std::make_unique<class UI::Button>(MenuBtnObj);
         BindMenuBtn->OnClicked([this]() { StartKeyCapture(0); });
 
         UObject* TestMenuBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget)
@@ -773,7 +773,7 @@ namespace DynPals {
             .DesiredSizeOverride(200.0f, 45.0f)
             .UnlockButtonSize(200.0f)
             .Build();
-        BindTestMenuBtn = std::make_unique<UI::Button>(TestMenuBtnObj);
+        BindTestMenuBtn = std::make_unique<class UI::Button>(TestMenuBtnObj);
         BindTestMenuBtn->OnClicked([this]() { StartKeyCapture(1); });
 
         UObject* BindRerollBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget)
@@ -781,7 +781,7 @@ namespace DynPals {
             .DesiredSizeOverride(200.0f, 45.0f)
             .UnlockButtonSize(200.0f)
             .Build();
-        BindRerollBtn = std::make_unique<UI::Button>(BindRerollBtnObj);
+        BindRerollBtn = std::make_unique<class UI::Button>(BindRerollBtnObj);
         BindRerollBtn->OnClicked([this]() { StartKeyCapture(2); });
 
         auto PrefsBuilder = UI::VerticalBox(MyWidget);

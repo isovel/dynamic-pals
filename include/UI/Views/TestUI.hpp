@@ -29,11 +29,11 @@ namespace DynPals {
 
         // Tab State Tracking
         int32_t ActiveTab = 0;
-        std::unique_ptr<UI::Button> TabBtn1;
-        std::unique_ptr<UI::Button> TabBtn2;
+        std::unique_ptr<class UI::Button> TabBtn1;
+        std::unique_ptr<class UI::Button> TabBtn2;
 
         // Tab 0: Vanilla Controls Elements
-        std::unique_ptr<UI::Button> HighlightButton;
+        std::unique_ptr<class UI::Button> HighlightButton;
         std::vector<RC::Unreal::UObject*> TextBlocks;
         std::vector<RC::Unreal::UObject*> RowIcons;
         bool bHighlight = false;

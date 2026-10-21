@@ -75,12 +75,12 @@ namespace DynPals {
         UObject* Tab1Widget = Tab1Builder.Build();
         UObject* Tab2Widget = Tab2Builder.Build();
 
-        TabBtn1 = std::make_unique<UI::Button>(Tab1Widget);
+        TabBtn1 = std::make_unique<class UI::Button>(Tab1Widget);
         TabBtn1->OnClicked([this]() {
             if (ActiveTab != 0) { ActiveTab = 0; if (TestDropdown) TestDropdown->ClosePopup(); RequestRebuild(); }
         });
 
-        TabBtn2 = std::make_unique<UI::Button>(Tab2Widget);
+        TabBtn2 = std::make_unique<class UI::Button>(Tab2Widget);
         TabBtn2->OnClicked([this]() {
             if (ActiveTab != 1) { ActiveTab = 1; RequestRebuild(); }
         });
@@ -97,7 +97,7 @@ namespace DynPals {
             
             UObject* ButtonRoot = ButtonBuilder.Build();
 
-            HighlightButton = std::make_unique<UI::Button>(ButtonRoot);
+            HighlightButton = std::make_unique<class UI::Button>(ButtonRoot);
             HighlightButton->OnClicked([this]() {
                 bHighlight = !bHighlight; 
 

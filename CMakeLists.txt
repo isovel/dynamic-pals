@@ -27,15 +27,15 @@ set(COMMON_SRC_FILES
     
     "src/UI/UIBase.cpp"       
     "src/UI/UIRegistry.cpp"   
-    "src/UI/views/TestUI.cpp"      
-    "src/UI/views/UIManager.cpp"  
+    "src/UI/Views/TestUI.cpp"      
+    "src/UI/Views/UIManager.cpp"  
     "src/NativeAsyncLoader.cpp"  
 )
 
 # -------------------------------------------------------------------------
 # TARGET 1: Standard Build (Compiles and Links WinINet with Updater.cpp)
 # -------------------------------------------------------------------------
-add_library(DynamicPals SHARED ${COMMON_SRC_FILES} "src/Updater.cpp")
+add_library(DynamicPals SHARED ${COMMON_SRC_FILES} "src/updater.cpp")
 target_include_directories(DynamicPals PRIVATE 
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "RE-UE4SS/UE4SS/include"

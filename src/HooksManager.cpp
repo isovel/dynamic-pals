@@ -18,7 +18,7 @@
 #include "UI/UIRegistry.hpp"
 #include "UI/Views/TestUI.hpp" 
 #include "UI/Views/UIManager.hpp"
-#include "Updater.hpp"
+#include "updater.hpp"
 #include "Utils.hpp"
 #include "VFXManager.hpp"
 #include "InputManager.hpp"
