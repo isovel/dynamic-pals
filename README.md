@@ -62,6 +62,8 @@ cd dynamic-pals
 git submodule update --init --recursive
 ```
 
+Besides UE4SS, three libraries come in as submodules under `deps/`: [pal-core](https://github.com/isovel/pal-core) (guarded engine calls, the game-thread queue, session events and toasts), [pal-config-lib](https://github.com/isovel/pal-config-lib) (`config.json`) and [pal-ui-lib](https://github.com/isovel/pal-ui-lib) (the Alt+N menu's client). The project builds as C++23.
+
 ### 2. Configure the Build Directories
 Generate the build system configuration [8]:
 
@@ -76,6 +78,15 @@ Compile the project using the native target configuration required by the game e
 cmake --build build --config Game__Shipping__Win64
 ```
 
+### 4. Run the Host Tests (optional)
+The settings logic is tested without the game. `tests/` is its own CMake project:
+
+```bash
+cmake -S tests -B build-host
+cmake --build build-host
+ctest --test-dir build-host
+```
+
 Upon successful compilation, the compiled `main.dll` and the dynamically updated `version.txt` (reflecting your current git commit count) will be automatically written to your local `dlls/` folder.
 
 ---
@@ -83,12 +94,13 @@ Upon successful compilation, the compiled `main.dll` and the dynamically updated
 ## How to Install the Mod
 
 1. Ensure [UE4SS](https://github.com/Okaetsu/RE-UE4SS) is installed in your Palworld directory (`Pal/Binaries/Win64/`).
-2. Create a folder named `DynamicPals` in your UE4SS `Mods` directory: 
+2. Install the [PalUI mod](https://github.com/isovel/pal-ui-lib/releases) beside it. The Alt+N menu is built with PalUI; without it DynamicPals still swaps pals, and Alt+N only says the menu needs PalUI.
+3. Create a folder named `DynamicPals` in your UE4SS `Mods` directory: 
    `Pal/Binaries/Win64/ue4ss/Mods/DynamicPals/`
-3. Copy your compiled `main.dll`, `version.txt` and `DynamicPals.pak` into:
+4. Copy your compiled `main.dll`, `version.txt` and `DynamicPals.pak` into:
    `Pal/Binaries/Win64/ue4ss/Mods/DynamicPals/dlls/`
-4. Copy `DynamicPals.pak` into `Pal/Content/Paks/LogicMods/` as well (the auto-update build does this for you on first launch; restart the game once afterwards).
-5. Enable the mod with an `enabled.txt` file in the `DynamicPals` folder, or add `DynamicPals : 1` to `Pal/Binaries/Win64/ue4ss/Mods/mods.txt`.
+5. Copy `DynamicPals.pak` into `Pal/Content/Paks/LogicMods/` as well (the auto-update build does this for you on first launch; restart the game once afterwards).
+6. Enable the mod with an `enabled.txt` file in the `DynamicPals` folder, or add `DynamicPals : 1` to `Pal/Binaries/Win64/ue4ss/Mods/mods.txt`.
 
 The release zips produced by the build (`DynamicPals_AutoUpdate.zip` / `DynamicPals.zip`) already contain this folder layout.
 
@@ -100,7 +112,17 @@ The release zips produced by the build (`DynamicPals_AutoUpdate.zip` / `DynamicP
 * **`Escape` (while menu is open):** Safely closes the menu, re-hiding the mouse cursor and returning input capture to the game camera.
 * **Reroll Pal:** Unbound by default. Assign a key in the menu's settings tab to reroll the Pal in your crosshair instantly.
 
-All hotkeys can be rebound from the settings tab of the `Alt + N` menu.
+All hotkeys can be rebound from the Preferences tab of the `Alt + N` menu.
+
+---
+
+## Settings
+
+`config.json` in the mod folder (`Pal/Binaries/Win64/ue4ss/Mods/DynamicPals/`) holds every setting, with a comment on each. Edits take effect while the game runs.
+
+* **Keybinds** are global.
+* **The camera settings** (`FocusPal`, `CameraRotation`, `RelativeCamera`) are defaults. A world keeps its own value for any of them you change in the menu, in its save under `Pal/Content/Paks/~mods/`.
+* **The first run** without a `config.json` writes one from the settings of your most recently played world.
 
 ---
 
