@@ -12,8 +12,6 @@ namespace DynPals {
     
     std::wstring MenuKey = L"N";
     std::wstring MenuModifier = L"LeftAlt"; 
-    std::wstring TestMenuKey = L"G";
-    std::wstring TestMenuModifier = L"LeftAlt";
 
     // --- ADD REROLL KEYBIND (Unset by default) ---
     std::wstring RerollKey = L"None";
@@ -23,10 +21,6 @@ namespace DynPals {
     int MenuKeyVK = 'N';
     int MenuModVK = 0x12; // VK_MENU
     bool bMenuIsGamepad = false;
-
-    int TestKeyVK = 'G';
-    int TestModVK = 0x12;
-    bool bTestIsGamepad = false;
 
     // --- ADD PRE-CACHED VKs ---
     int RerollKeyVK = 0;

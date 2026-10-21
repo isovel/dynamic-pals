@@ -19,8 +19,6 @@
 #include "NotificationManager.hpp"
 #include "PalProcessor.hpp"
 #include "SaveManager.hpp"
-#include "UI/UIRegistry.hpp"
-#include "UI/Views/TestUI.hpp" 
 #include "UI/Views/UIManager.hpp"
 #include "updater.hpp"
 #include "Utils.hpp"
@@ -327,24 +325,12 @@ static void OnEngineTick(Unreal::Hook::TCallbackIterationData<void>&, Unreal::UE
                 if (!bMenuKeyPressed) {
                     bMenuKeyPressed = true;
                     DP_LOG(Default, "[Hotkey] Main Menu hotkey triggered!");
-                    UIManager::Get().RequestToggle();
+                    UIManager::Get().Toggle(PlayerController);
                 }
             } else {
                 bMenuKeyPressed = false;
             }
 
-            static bool bTestMenuKeyPressed = false;
-            if (InputManager::Get().IsHotkeyDownFast(PlayerController, Settings.TestModVK, Settings.TestKeyVK, Settings.bTestIsGamepad, Settings.TestMenuModifier, Settings.TestMenuKey)) {
-                if (!bTestMenuKeyPressed) {
-                    bTestMenuKeyPressed = true;
-                    DP_LOG(Default, "[Hotkey] Test Menu hotkey triggered!");
-                    TestUI::Get().RequestToggle();
-                }
-            } else {
-                bTestMenuKeyPressed = false;
-            }
-
-            // Direct Reroll Pal Hotkey
             // Direct Reroll Pal Hotkey
             static bool bRerollKeyPressed = false;
             if (InputManager::Get().IsHotkeyDownFast(PlayerController, Settings.RerollModVK, Settings.RerollKeyVK, Settings.bRerollIsGamepad, Settings.RerollModifier, Settings.RerollKey)) {
@@ -371,10 +357,7 @@ static void OnEngineTick(Unreal::Hook::TCallbackIterationData<void>&, Unreal::UE
         }
     }
 
-    if (UIRegistry::Get().RequiresTick() && PlayerController) {
-        DP_PROFILE("UIRegistry_TickAll", 2.0); 
-        UIRegistry::Get().TickAll(PlayerController);
-    }
+    UIManager::Get().Tick();
 }
 
 static void OnWidgetAddedToViewport(UnrealScriptFunctionCallableContext& Context, void*) {
@@ -456,7 +439,7 @@ static void OnSessionUnloading() {
 
     SaveManager::Get().Reset();
     PalProcessor::Get().ClearAllSwappedStatus();
-    UIRegistry::Get().InvalidateAllUIs();
+    UIManager::Get().CloseForUnload();
     Utils::Caches::ClearAll();
     NativeAsyncLoader::ClearCache();
 }

@@ -7,3 +7,6 @@
 [submodule "deps/pal-config-lib"]
 	path = deps/pal-config-lib
 	url = https://github.com/isovel/pal-config-lib.git
+[submodule "deps/pal-ui-lib"]
+	path = deps/pal-ui-lib
+	url = https://github.com/isovel/pal-ui-lib.git

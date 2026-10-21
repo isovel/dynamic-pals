@@ -2,27 +2,39 @@
 #include <Windows.h>
 
 #include "UI/Views/UIManager.hpp"
-#include "UI/Components/WindowFrame.hpp"
-#include "UI/WidgetBuilder.hpp"
-#include "UI/IconLibrary.hpp"
 #include "ConfigManager.hpp"
+#include "NotificationManager.hpp"
 #include "SaveManager.hpp"
 #include "PalProcessor.hpp"
 #include "InputManager.hpp"
 #include "Utils.hpp"
 #include "DataTypes.hpp"
+#include <PalUI/Client.hpp>
 #include <cmath>
 #include <map>
 #include <algorithm>
 #include <chrono>
+#include <optional>
 
 using namespace RC;
 using namespace RC::Unreal;
 
 namespace DynPals {
 
+    struct UIManager::State {
+        std::optional<PalUI::Client::Window> Window;
+        PalUI::Client::Page Settings;
+        PalUI::Client::Page Prefs;
+        // One choice row per pack, and the config each of its choices swaps to.
+        std::vector<PalUI::Client::Row> PackRows;
+        std::vector<std::vector<int>> PackConfigs;
+        PalUI::Client::Row CaptureRow;
+        std::optional<PalUI::Client::Dialog> Choice;
+        bool bCloseRequested = false;
+    };
 
-    
+    UIManager::UIManager() : S(std::make_unique<State>()) {}
+    UIManager::~UIManager() = default;
 
     // Set to true for smooth camera interpolation; set to false for instant snapping
     static constexpr bool bEnableCameraSmoothing = false;
@@ -98,13 +110,6 @@ namespace DynPals {
     }
 
     // --- CONSOLIDATED SCROLL OFFSET CACHER ---
-    void UIManager::CacheScrollOffset() {
-        if (MainScrollBoxObj && GetScrollOffsetFunc) {
-            struct { float Offset; } Params{ 0.0f };
-            Utils::SafeProcessEvent(MainScrollBoxObj, GetScrollOffsetFunc, &Params);
-            LastScrollOffset = Params.Offset;
-        }
-    }
 
     // --- DEBOUNCED DISK SAVE METHODS ---
     void UIManager::TriggerSaveDebounced() {
@@ -359,7 +364,99 @@ namespace DynPals {
         }
     }
 
-    bool UIManager::OnSetup() {
+
+    void UIManager::ApplySize(double NewValue) {
+        LastObservedSize = NewValue;
+
+        PalPersistData* p = SaveManager::Get().GetPersistData(TargetInstanceID);
+        if (p) {
+            p->SizeMultiplier = NewValue;
+            SaveManager::Get().SetPersistData(TargetInstanceID, *p, false); // <--- Pass false (memory only)
+
+            if (TargetPal && Utils::IsObjectValid(TargetPal)) {
+                UObject* MeshComp = nullptr;
+                Utils::CallFunction(TargetPal, STR("GetMainMesh"), &MeshComp);
+                if (MeshComp && Utils::IsObjectValid(MeshComp)) {
+                    UClass* CharClass = TargetPal->GetClassPrivate();
+                    if (CharClass) {
+                        UObject* CDO = CharClass->GetClassDefaultObject();
+                        UObject* VanillaMesh = nullptr;
+                        if (CDO) Utils::GetPropertyValue<UObject*>(CDO, STR("Mesh"), VanillaMesh);
+                        
+                        FVector_UE5 BaseScale{ 1.0, 1.0, 1.0 };
+                        if (VanillaMesh) {
+                            FVector_UE5 CDOScale{ 1.0, 1.0, 1.0 };
+                            if (Utils::GetPropertyValue<FVector_UE5>(VanillaMesh, STR("RelativeScale3D"), CDOScale)) {
+                                if (CDOScale.X > 0.001 && CDOScale.Y > 0.001 && CDOScale.Z > 0.001) BaseScale = CDOScale;
+                            }
+                        }
+
+                        if (NewValue <= 0.001) NewValue = 1.0;
+                        FVector_UE5 FinalMeshScale{ BaseScale.X * NewValue, BaseScale.Y * NewValue, BaseScale.Z * NewValue };
+
+                        Utils::SetPropertyValue<FVector_UE5>(MeshComp, STR("DefaultScale3D"), FinalMeshScale);
+                        struct { FVector_UE5 NewScale3D; } ScaleParams{ FinalMeshScale };
+                        Utils::CallFunction(MeshComp, STR("SetRelativeScale3D"), &ScaleParams);
+                    }
+                }
+            }
+        }
+    }
+
+    void UIManager::ApplyMorph(const std::wstring& MorphName, double NewValue) {
+        PalPersistData* p = SaveManager::Get().GetPersistData(TargetInstanceID);
+        if (p) {
+            p->MorphSet[MorphName] = NewValue;
+            SaveManager::Get().SetPersistData(TargetInstanceID, *p, false); // <--- Pass false (memory only)
+            
+            UObject* MeshComp = nullptr;
+            Utils::CallFunction(TargetPal, STR("GetMainMesh"), &MeshComp);
+            if (MeshComp) {
+                struct { FName MorphTargetName; float Value; bool bRemoveZeroWeight; } MorphParams{
+                    FName(MorphName.c_str(), FNAME_Add), static_cast<float>(NewValue), false
+                };
+                Utils::CallFunction(MeshComp, STR("SetMorphTarget"), &MorphParams);
+            }
+        }
+    }
+
+    void UIManager::Attach(PalUI::Client::Connection* InUI) {
+        UI = InUI;
+    }
+
+    void UIManager::Detach() {
+        if (S->Window) Close();
+        S->Choice.reset();
+        UI = nullptr;
+    }
+
+    bool UIManager::ShowChoice(const std::wstring& Message, std::function<void(bool)> OnResult) {
+        if (!UI) return false;
+        S->Choice.emplace(*UI);
+        return S->Choice->Show(Utils::WStringToString(Message), PalUI::Client::DialogKind::OkCancel, std::move(OnResult));
+    }
+
+    bool UIManager::IsMenuOpen() const {
+        return S->Window && S->Window->IsOpen();
+    }
+
+    void UIManager::Toggle(RC::Unreal::UObject* PlayerController) {
+        if (!UI) {
+            if (!bWarnedMissing) {
+                bWarnedMissing = true;
+                NotificationManager::Get().EnqueueToast(L"The DynamicPals menu needs the PalUI mod", EPalLogPriority::Important, EPalLogContentToneType::Negative);
+            }
+            return;
+        }
+        if (IsMenuOpen()) {
+            Close();
+            return;
+        }
+        CurrentPlayerController = PlayerController;
+        Open();
+    }
+
+    bool UIManager::Open() {
         UpdateTarget();
         
         if (!CurrentPlayerController) {
@@ -370,6 +467,14 @@ namespace DynPals {
         if (!TargetPal) {
             EnqueueUIToast(L"No valid Pal found in range!", 2, 1);
             return false; 
+        }
+
+        S->Window.emplace(*UI);
+        S->Window->SetSize(650.0, 760.0);
+        if (!S->Window->Open()) {
+            S->Window.reset();
+            DP_LOG(Warning, "PalUI did not open the menu window.");
+            return false;
         }
 
         RC::Unreal::UFunction* GetViewTargetFunc = CurrentPlayerController->GetFunctionByNameInChain(STR("GetViewTarget")); 
@@ -390,154 +495,98 @@ namespace DynPals {
             EnablePalCamera();
         }
 
+        Fill();
+        bWasOpen = true;
         return true;
     }
 
-    void UIManager::OnInvalidate() {
+    void UIManager::Close() {
+        if (S->Window) S->Window->Close();
+        OnClosed();
+    }
+
+    void UIManager::OnClosed() {
         if (InputManager::Get().IsCapturing()) {
             InputManager::Get().CancelCapture();
         }
         FlushPendingSave();
-        TargetPal = nullptr;
-
-        TargetInstanceID = L"";
-        TargetCharID = L"";
-        SkinDropdown = nullptr;
-        
-        if (PreloadContainer) {
-            Utils::CallFunction(PreloadContainer, STR("RemoveFromParent"));
-            PreloadContainer = nullptr;
-        }
-        HideInvalidSwitch = nullptr;
-        RerollButton = nullptr;
-        ResetButton = nullptr;
-        MorphSliderPool.clear(); 
-        ActiveMorphSlidersCount = 0;
-        FocusPalSwitch = nullptr;
-        RelativeCameraSwitch = nullptr;
-        CameraRotationSlider = nullptr;
-        SizeSlider = nullptr;
-        MainScrollBoxObj = nullptr;
-        GetScrollOffsetFunc = nullptr;
-        
-        PalFontCache = nullptr;
-        
-        DynamicMorphBox = nullptr;
-        DynamicLogBox = nullptr;
-        CameraRotationContainer = nullptr;
-        SizeSliderContainer = nullptr;
-        HeaderTextObj = nullptr;
-        WidgetTrashBin = nullptr;
-
-        LastObservedSize = -999.0;
-        LastObservedLabel = L"";
-
-        LogTextPool.clear();
-        DropdownOptions.clear();
-        DropdownConfigIndices.clear();
-
-        OriginalViewTarget = nullptr;
-        bIsPalCameraActive = false;
-    }
-
-    bool UIManager::OnUObjectDeleted(RC::Unreal::UObject* Obj) {
-        bool bFound = UIBase::OnUObjectDeleted(Obj);
-        if (TargetPal == Obj) { TargetPal = nullptr; bFound = true; }
-        if (OriginalViewTarget == Obj) { OriginalViewTarget = nullptr; bFound = true; }
-        if (MainScrollBoxObj == Obj) { MainScrollBoxObj = nullptr; bFound = true; }
-        if (DynamicMorphBox == Obj) { DynamicMorphBox = nullptr; bFound = true; }
-        if (DynamicLogBox == Obj) { DynamicLogBox = nullptr; bFound = true; }
-        if (CameraRotationContainer == Obj) { CameraRotationContainer = nullptr; bFound = true; }
-        if (SizeSliderContainer == Obj) { SizeSliderContainer = nullptr; bFound = true; }
-        if (HeaderTextObj == Obj) { HeaderTextObj = nullptr; bFound = true; }
-        if (WidgetTrashBin == Obj) { WidgetTrashBin = nullptr; bFound = true; }
-        if (CaptureOverlay == Obj) { CaptureOverlay = nullptr; bFound = true; }
-        if (Tab1Widget == Obj) { Tab1Widget = nullptr; bFound = true; }
-        if (Tab2Widget == Obj) { Tab2Widget = nullptr; bFound = true; }
-        if (PreloadContainer == Obj) { PreloadContainer = nullptr; bFound = true; }
-        if (SettingsTabContainer == Obj) { SettingsTabContainer = nullptr; bFound = true; }
-        if (PreferencesTabContainer == Obj) { PreferencesTabContainer = nullptr; bFound = true; }
-        if (PalFontCache == Obj) { PalFontCache = nullptr; bFound = true; }
-
-        auto it = std::remove(LogTextPool.begin(), LogTextPool.end(), Obj);
-        if (it != LogTextPool.end()) {
-            LogTextPool.erase(it, LogTextPool.end());
-            bFound = true;
-        }
-        return bFound;
-    }
-
-    void UIManager::OnOpen() {
-        SwitchTab(ActiveTab);
-    }
-
-    void UIManager::OnClose() {
-        if (InputManager::Get().IsCapturing()) {
-            InputManager::Get().CancelCapture();
-        }
-        if (CaptureOverlay) {
-            struct { uint8_t Vis; } VisParams{ 1 };
-            Utils::CallFunction(CaptureOverlay, STR("SetVisibility"), &VisParams);
-        }
-        bCloseOnEscape = true;
-        FlushPendingSave();
-
-        if (SkinDropdown) SkinDropdown->ClosePopup();
-
-        TargetPal = nullptr;
-        TargetInstanceID = L"";
-        TargetCharID = L"";
-        LastScrollOffset = 0.0f;
-        bNeedsRefresh = false;
 
         DisablePalCamera();
         OriginalViewTarget = nullptr;
+        bIsPalCameraActive = false;
+
+        TargetPal = nullptr;
+        TargetInstanceID = L"";
+        TargetCharID = L"";
+        bNeedsRefresh = false;
+        bWasOpen = false;
+        LastObservedSize = -999.0;
+        LastObservedLabel = L"";
+
+        S->CaptureRow = {};
+        S->PackRows.clear();
+        S->PackConfigs.clear();
+        S->Settings = {};
+        S->Prefs = {};
+        S->bCloseRequested = false;
+        S->Window.reset();
     }
 
-
-        std::wstring UIManager::FormatKeybindText(const std::wstring& Modifier, const std::wstring& Key) {
-    if (Key.empty() || Key == L"None") {
-        return L"[ Unset ]";
+    bool UIManager::OnUObjectDeleted(RC::Unreal::UObject* Obj) {
+        bool bFound = false;
+        if (TargetPal == Obj) { TargetPal = nullptr; S->bCloseRequested = true; bFound = true; }
+        if (OriginalViewTarget == Obj) { OriginalViewTarget = nullptr; bFound = true; }
+        if (CurrentPlayerController == Obj) { CurrentPlayerController = nullptr; bFound = true; }
+        return bFound;
     }
-    std::wstring result = L"[ ";
-    if (!Modifier.empty() && Modifier != L"None") result += Modifier + L" + ";
-    result += Key + L" ]";
-    return result;
-}
 
-    void UIManager::SwitchTab(int32_t NewTab) {
-        ActiveTab = NewTab;
-        if (SkinDropdown) SkinDropdown->ClosePopup();
+    void UIManager::CloseForUnload() {
+        if (S->Window) Close();
+        CurrentPlayerController = nullptr;
+    }
 
-        struct { uint8_t Vis; } VisibleParam{ 0 };
-        struct { uint8_t Vis; } CollapsedParam{ 1 };
+    void UIManager::Fill() {
+        S->Settings = S->Window->AddTab("Settings");
+        S->Prefs = S->Window->AddTab("Preferences");
+        FillSettings();
+        FillPreferences();
 
-        if (ActiveTab == 0) {
-            if (SettingsTabContainer) Utils::CallFunction(SettingsTabContainer, STR("SetVisibility"), &VisibleParam);
-            if (PreferencesTabContainer) Utils::CallFunction(PreferencesTabContainer, STR("SetVisibility"), &CollapsedParam);
-            RefreshUI();
-        } else {
-            if (SettingsTabContainer) Utils::CallFunction(SettingsTabContainer, STR("SetVisibility"), &CollapsedParam);
-            if (PreferencesTabContainer) Utils::CallFunction(PreferencesTabContainer, STR("SetVisibility"), &VisibleParam);
+        // Escape cancels a key capture first; the close itself waits for Tick,
+        // since the window cannot go while its own handler runs.
+        S->Window->SetCancel([this]() {
+            if (InputManager::Get().IsCapturing()) return;
+            S->bCloseRequested = true;
+        });
+
+        PalPersistData* currentPersist = SaveManager::Get().GetPersistData(TargetInstanceID);
+        const bool bLocked = currentPersist && currentPersist->bIsManuallyLocked;
+        S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), bLocked ? "LOCKED" : "");
+        S->Window->SelectTab(0);
+    }
+
+    std::wstring UIManager::FormatKeybindText(const std::wstring& Modifier, const std::wstring& Key) {
+        if (Key.empty() || Key == L"None") {
+            return L"[ Unset ]";
         }
-
-        struct { bool bActive; } Tab1Params{ ActiveTab == 0 };
-        struct { bool bActive; } Tab2Params{ ActiveTab == 1 };
-        if (Tab1Widget) Utils::CallFunction(Tab1Widget, STR("SetTabActive"), &Tab1Params);
-        if (Tab2Widget) Utils::CallFunction(Tab2Widget, STR("SetTabActive"), &Tab2Params);
+        std::wstring result = L"[ ";
+        if (!Modifier.empty() && Modifier != L"None") result += Modifier + L" + ";
+        result += Key + L" ]";
+        return result;
     }
 
-
-    
-    
+    void UIManager::FillPreferences() {
+        auto& Settings = SaveManager::Get().Settings;
+        S->Prefs.AddHeader("Global Keybinds");
+        S->Prefs.AddLabelWithButton("Main Menu Toggle", Utils::WStringToString(FormatKeybindText(Settings.MenuModifier, Settings.MenuKey)),
+                                    [this]() { StartKeyCapture(0); });
+        S->Prefs.AddLabelWithButton("Direct Reroll Pal", Utils::WStringToString(FormatKeybindText(Settings.RerollModifier, Settings.RerollKey)),
+                                    [this]() { StartKeyCapture(2); });
+        S->CaptureRow = S->Prefs.AddLabel("");
+    }
 
     void UIManager::StartKeyCapture(int Target) {
-        bCloseOnEscape = false;
-
-        if (CaptureOverlay) {
-            struct { uint8_t Vis; } VisParams{ 0 };
-            Utils::CallFunction(CaptureOverlay, STR("SetVisibility"), &VisParams);
-        }
+        if (InputManager::Get().IsCapturing()) return;
+        S->CaptureRow.SetText("Press any key or button... (Esc cancels)");
 
         InputManager::Get().StartCapture(
             [this, Target](const std::wstring& Key, const std::wstring& Mod) {
@@ -545,369 +594,33 @@ namespace DynPals {
                 if (Target == 0) {
                     Settings.MenuKey = Key;
                     Settings.MenuModifier = Mod;
-                    if (BindMenuBtn && BindMenuBtn->GetWidget()) {
-                        Utils::SetTextSafely(BindMenuBtn->GetWidget(), STR("SetText"), FormatKeybindText(Mod, Key));
-                    }
-                } else if (Target == 1) {
-                    Settings.TestMenuKey = Key;
-                    Settings.TestMenuModifier = Mod;
-                    if (BindTestMenuBtn && BindTestMenuBtn->GetWidget()) {
-                        Utils::SetTextSafely(BindTestMenuBtn->GetWidget(), STR("SetText"), FormatKeybindText(Mod, Key));
-                    }
-                } else if (Target == 2) { // <--- Added: Handles Reroll Button
+                } else if (Target == 2) {
                     Settings.RerollKey = Key;
                     Settings.RerollModifier = Mod;
-                    if (BindRerollBtn && BindRerollBtn->GetWidget()) {
-                        Utils::SetTextSafely(BindRerollBtn->GetWidget(), STR("SetText"), FormatKeybindText(Mod, Key));
-                    }
                 }
-                Settings.CacheKeybinds(); // Updates RerollKeyVK to 'K' (0x4B)
-                SaveManager::Get().SaveWorldData();
+                Settings.CacheKeybinds();
+                SaveManager::Get().SaveGlobal();
 
-                if (CaptureOverlay) {
-                    struct { uint8_t Vis; } VisParams{ 1 };
-                    Utils::CallFunction(CaptureOverlay, STR("SetVisibility"), &VisParams);
-                }
-                bCloseOnEscape = true;
+                // The bound key shows on the row's button, which takes no new text, so the page is filled again.
+                if (S->Prefs.IsValid() && S->Prefs.Clear()) FillPreferences();
             },
             [this]() {
-                if (CaptureOverlay) {
-                    struct { uint8_t Vis; } VisParams{ 1 };
-                    Utils::CallFunction(CaptureOverlay, STR("SetVisibility"), &VisParams);
-                }
-                bCloseOnEscape = true;
+                S->CaptureRow.SetText("");
             }
         );
     }
 
-
     void UIManager::PreloadUI(RC::Unreal::UObject* PC) {
-        if (!SkinDropdown) {
-            SkinDropdown = std::make_unique<UI::Dropdown>(std::vector<std::wstring>{}, 0);
-        }
-        
-        std::vector<std::wstring> AssetsToCache = {
-            UI::Assets::Blueprints::CommonWindow,
-            UI::Assets::Blueprints::CommonButton,
-            UI::Assets::Blueprints::PalTextBlock,
-            UI::Assets::Blueprints::PalActionBar,
-            UI::Assets::Fonts::PalDefault,
-            UI::Assets::Borders::Frame1px,
-            UI::Assets::Borders::WhiteSolid,
-            L"/Game/Pal/Effect/Common/LevelUp/NS_LevelUp_Pal" 
-        };
-        for (const auto& AssetPath : AssetsToCache) {
-            Utils::LoadAssetSafely(AssetPath);
-        }
-
-        UObject* WBL = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/UMG.Default__WidgetBlueprintLibrary"));
-        UClass* WidgetClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/UMG.UserWidget"));
-        if (!WBL || !WidgetClass) return;
-
-        struct { UObject* WorldContext; UClass* WidgetType; UObject* OwningPlayer; UObject* ReturnValue; } CreateParams{
-            PC, WidgetClass, PC, nullptr
-        };
-        Utils::CallFunction(WBL, STR("Create"), &CreateParams);
-        PreloadContainer = CreateParams.ReturnValue;
-
-        if (PreloadContainer) {
-            UObject* ScrollBox = UI::ScrollBox(PreloadContainer).Build();
-            
-            UObject* WidgetTree = nullptr;
-            if (Utils::GetPropertyValue(PreloadContainer, STR("WidgetTree"), WidgetTree) && WidgetTree) {
-                FProperty* RootProp = Utils::GetProperty(WidgetTree, STR("RootWidget"));
-                if (RootProp) *RootProp->ContainerPtrToValuePtr<UObject*>(WidgetTree) = ScrollBox;
-            }
-
-            struct { uint8_t InVisibility; } VisParams{ 1 };
-            Utils::CallFunction(PreloadContainer, STR("SetVisibility"), &VisParams);
-            
-            struct FVector2D_Double { double X; double Y; };
-            struct { FVector2D_Double Translation; } RenderParams{ {-99999.0, -99999.0} };
-            Utils::CallFunction(PreloadContainer, STR("SetRenderTranslation"), &RenderParams);
-            
-            struct { int32_t ZOrder; } ViewportParams{ -9999 };
-            Utils::CallFunction(PreloadContainer, STR("AddToViewport"), &ViewportParams);
-
-            SkinDropdown->SetTrashBin(ScrollBox);
-            SkinDropdown->PreloadPool(PreloadContainer, 50, 10);
-            
-            for (auto& header : SkinDropdown->GetHeaderPool()) {
-                if (header.RootWidget && ScrollBox) {
-                    struct { UObject* Content; UObject* ReturnValue; } AddParams{header.RootWidget, nullptr};
-                    Utils::CallFunction(ScrollBox, STR("AddChild"), &AddParams);
-                }
-            }
-            for (auto& btn : SkinDropdown->GetButtonPool()) {
-                if (btn.RootWidget && ScrollBox) {
-                    struct { UObject* Content; UObject* ReturnValue; } AddParams{btn.RootWidget, nullptr};
-                    Utils::CallFunction(ScrollBox, STR("AddChild"), &AddParams);
-                }
-            }
-        }
+        CurrentPlayerController = PC;
+        Utils::LoadAssetSafely(L"/Game/Pal/Effect/Common/LevelUp/NS_LevelUp_Pal");
     }
 
-
-
-
-    void UIManager::BuildWidget() {
-        if (!CurrentPlayerController || !TargetPal) return;
-
-        LogTextPool.clear();
-        MorphSliderPool.clear();
-        ActiveMorphSlidersCount = 0;
-
-        UObject* WBL = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/UMG.Default__WidgetBlueprintLibrary"));
-        UClass* WidgetClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/UMG.UserWidget"));
-        if (!WBL || !WidgetClass) return;
-
-        struct { UObject* WorldContext; UClass* WidgetType; UObject* OwningPlayer; UObject* ReturnValue; } CreateParams{
-            CurrentPlayerController, WidgetClass, CurrentPlayerController, nullptr
-        };
-        Utils::CallFunction(WBL, STR("Create"), &CreateParams);
-        MyWidget = CreateParams.ReturnValue;
-
-        PalFontCache = Utils::LoadAssetSafely(UI::Assets::Fonts::PalDefault);
-        const FLinearColor_UE5 PalBlue = {0.78f, 0.96f, 1.0f, 1.0f}; 
-        const FLinearColor_UE5 White   = {1.0f, 1.0f, 1.0f, 1.0f};
-        const FLinearColor_UE5 Emerald = {0.063f, 0.725f, 0.506f, 1.0f};
-
-        auto HeaderTextBuilder = UI::Text(MyWidget).Text(L"DYN PALS: " + TargetCharID).Font(PalFontCache, L"Bold", 24).TextOutline(2, {0.0f, 0.0f, 0.0f, 1.0f}).TextColor(PalBlue);
-        HeaderTextObj = HeaderTextBuilder.Build();
-
-        auto HeaderBox = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(UI::Image(MyWidget).ImageFromAsset(UI::Assets::Common::NoticeMark).ImageColor(PalBlue).ImageSize(24, 24), [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 10, 0).VerticalAlignment(EBuilderVerticalAlignment::VAlign_Center); }) 
-            .AddToHorizontalBox(DynPals::WidgetBuilder(HeaderTextObj));
-
-        // --- 1. TABS (SWITCH ON VISIBILITY) ---
-        auto TabLayout = UI::HorizontalBox(MyWidget);
-        auto Tab1Builder = UI::OptionTab(MyWidget).SetupTab(L"Settings", 0);
-        auto Tab2Builder = UI::OptionTab(MyWidget).SetupTab(L"Preferences", 1);
-        Tab1Widget = Tab1Builder.Build();
-        Tab2Widget = Tab2Builder.Build();
-
-        TabBtn1 = std::make_unique<class UI::Button>(Tab1Widget);
-        TabBtn1->OnClicked([this]() { SwitchTab(0); });
-        TabBtn2 = std::make_unique<class UI::Button>(Tab2Widget);
-        TabBtn2->OnClicked([this]() { SwitchTab(1); });
-
-        TabLayout.AddToHorizontalBox(Tab1Builder, [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 10, 0); })
-                 .AddToHorizontalBox(Tab2Builder);
-
-        // --- 2. BUILD TAB 0 CONTENT (SETTINGS) ---
-        DynamicMorphBox = UI::VerticalBox(MyWidget).Build();
-        DynamicLogBox = UI::VerticalBox(MyWidget).Build();
-        CameraRotationContainer = UI::VerticalBox(MyWidget).Build();
-        SizeSliderContainer = UI::VerticalBox(MyWidget).Build();
-
-        WidgetTrashBin = UI::VerticalBox(MyWidget).Build();
-        struct { uint8_t InVisibility; } TrashVis{ 1 };
-        Utils::CallFunction(WidgetTrashBin, STR("SetVisibility"), &TrashVis);
-
-        if (!SkinDropdown) { SkinDropdown = std::make_unique<UI::Dropdown>(std::vector<std::wstring>{}, 0); }
-        SkinDropdown->SetTrashBin(WidgetTrashBin);
-
-        SkinDropdown->OnChanged([this](int Index, std::wstring Choice) {
-            if (Index >= 0 && Index < static_cast<int>(DropdownConfigIndices.size())) {
-                int TargetConfig = DropdownConfigIndices[Index];
-                if (TargetConfig != -1) PalProcessor::Get().ForceSwap(TargetPal, TargetConfig);
-                CacheScrollOffset();
-            }
-        });
-
-        HideInvalidSwitch = std::make_unique<UI::Switch>(MyWidget, bHideInvalidSwaps);
-        HideInvalidSwitch->OnChanged([this](bool bState) { bHideInvalidSwaps = bState; CacheScrollOffset(); bNeedsRefresh = true; });
-
-        FocusPalSwitch = std::make_unique<UI::Switch>(MyWidget, SaveManager::Get().Settings.bFocusPal);
-        FocusPalSwitch->OnChanged([this](bool bState) {
-            SaveManager::Get().Settings.bFocusPal = bState; SaveManager::Get().SaveWorldData();
-            if (bState) EnablePalCamera(); else DisablePalCamera();
-            CacheScrollOffset(); bNeedsRefresh = true; 
-        });
-
-        UObject* RerollBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget).Text(L"      Reroll Pal      ").BackgroundColor(PalBlue).DesiredSizeOverride(300.0f, 45.0f).UnlockButtonSize(300.0f).Build();
-        RerollButton = std::make_unique<class UI::Button>(RerollBtnObj);
-        RerollButton->OnClicked([this]() { PalProcessor::Get().ProcessPal(TargetPal, true); CacheScrollOffset(); bNeedsRefresh = true; });
-
-        UObject* ResetBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget).Text(L"      Reset Pal      ").BackgroundColor(FLinearColor_UE5{0.85f, 0.25f, 0.25f, 1.0f}).DesiredSizeOverride(300.0f, 45.0f).UnlockButtonSize(300.0f).Build();
-        ResetButton = std::make_unique<class UI::Button>(ResetBtnObj);
-        ResetButton->OnClicked([this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); CacheScrollOffset(); bNeedsRefresh = true; } });
-
-        auto SettingsBuilder = UI::VerticalBox(MyWidget);
-        SettingsBuilder.AddToVerticalBox(UI::HorizontalBox(MyWidget).AddToHorizontalBox(UI::Text(MyWidget).Text(L"Current Swap:").Font(PalFontCache, L"Medium", 20).TextColor(Emerald), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 10); }));
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(L"/Script/UMG.SizeBox", MyWidget).AddChild(DynPals::WidgetBuilder(SkinDropdown->Build(MyWidget, CurrentPlayerController))), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 20); });
-        SettingsBuilder.AddToVerticalBox(WidgetBuilder(RerollBtnObj), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(20.0f, 0.0f, 20.0f, 10.0f).HorizontalAlignment(DynPals::EBuilderHorizontalAlignment::HAlign_Center); });
-        SettingsBuilder.AddToVerticalBox(WidgetBuilder(ResetBtnObj), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(20.0f, 0.0f, 20.0f, 15.0f).HorizontalAlignment(DynPals::EBuilderHorizontalAlignment::HAlign_Center); });
-
-        auto FilterRow = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(DynPals::WidgetBuilder(HideInvalidSwitch->GetWidget()), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 10, 0); })
-            .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Hide Invalid").Font(PalFontCache, L"Medium", 18).TextColor(White), [](DynPals::BoxSlotBuilder& Slot) { Slot.VerticalAlignment(DynPals::EBuilderVerticalAlignment::VAlign_Center); });
-        SettingsBuilder.AddToVerticalBox(FilterRow, [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 25); });
-
-        auto CameraSettingsRow = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(DynPals::WidgetBuilder(FocusPalSwitch->GetWidget()), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 10, 0); })
-            .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Focus Pal Camera").Font(PalFontCache, L"Medium", 18).TextColor(White), [](DynPals::BoxSlotBuilder& Slot) { Slot.VerticalAlignment(DynPals::EBuilderVerticalAlignment::VAlign_Center); });
-        SettingsBuilder.AddToVerticalBox(CameraSettingsRow, [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 15); });
-
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(CameraRotationContainer), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 10); });
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(SizeSliderContainer), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 10); });
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(DynamicMorphBox), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 10); });
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(DynamicLogBox), [](DynPals::BoxSlotBuilder& Slot) { Slot.Padding(0, 10, 0, 10); });
-        // End of Tab 0
-        SettingsBuilder.AddToVerticalBox(DynPals::WidgetBuilder(WidgetTrashBin));
-        SettingsTabContainer = SettingsBuilder.Build();
-
-        // --- 3. BUILD TAB 1 CONTENT (PREFERENCES) ---
-        auto& Settings = SaveManager::Get().Settings;
-
-        UObject* MenuBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget)
-            .Text(FormatKeybindText(Settings.MenuModifier, Settings.MenuKey))
-            .DesiredSizeOverride(200.0f, 45.0f)
-            .UnlockButtonSize(200.0f)
-            .Build();
-        BindMenuBtn = std::make_unique<class UI::Button>(MenuBtnObj);
-        BindMenuBtn->OnClicked([this]() { StartKeyCapture(0); });
-
-        UObject* TestMenuBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget)
-            .Text(FormatKeybindText(Settings.TestMenuModifier, Settings.TestMenuKey))
-            .DesiredSizeOverride(200.0f, 45.0f)
-            .UnlockButtonSize(200.0f)
-            .Build();
-        BindTestMenuBtn = std::make_unique<class UI::Button>(TestMenuBtnObj);
-        BindTestMenuBtn->OnClicked([this]() { StartKeyCapture(1); });
-
-        UObject* BindRerollBtnObj = WidgetBuilder(UI::Assets::Blueprints::CommonButton, MyWidget)
-            .Text(FormatKeybindText(Settings.RerollModifier, Settings.RerollKey))
-            .DesiredSizeOverride(200.0f, 45.0f)
-            .UnlockButtonSize(200.0f)
-            .Build();
-        BindRerollBtn = std::make_unique<class UI::Button>(BindRerollBtnObj);
-        BindRerollBtn->OnClicked([this]() { StartKeyCapture(2); });
-
-        auto PrefsBuilder = UI::VerticalBox(MyWidget);
-        PrefsBuilder.AddToVerticalBox(UI::Text(MyWidget).Text(L"Global Keybinds").Font(PalFontCache, L"Bold", 20).TextColor(Emerald), [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 15); });
-        
-        auto BindRow1 = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Main Menu Toggle").Font(PalFontCache, L"Medium", 18).TextColor(White), [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 20, 0).VerticalAlignment(EBuilderVerticalAlignment::VAlign_Center); })
-            .AddToHorizontalBox(DynPals::WidgetBuilder(MenuBtnObj));
-
-        auto BindRow2 = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Test Menu Toggle").Font(PalFontCache, L"Medium", 18).TextColor(White), [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 20, 0).VerticalAlignment(EBuilderVerticalAlignment::VAlign_Center); })
-            .AddToHorizontalBox(DynPals::WidgetBuilder(TestMenuBtnObj));
-
-        auto BindRow3 = UI::HorizontalBox(MyWidget)
-            .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Direct Reroll Pal").Font(PalFontCache, L"Medium", 18).TextColor(White), [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 20, 0).VerticalAlignment(EBuilderVerticalAlignment::VAlign_Center); })
-            .AddToHorizontalBox(DynPals::WidgetBuilder(BindRerollBtnObj));
-
-        PrefsBuilder.AddToVerticalBox(BindRow1, [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 15); });
-        PrefsBuilder.AddToVerticalBox(BindRow2, [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 15); });
-        PrefsBuilder.AddToVerticalBox(BindRow3, [](BoxSlotBuilder& Slot) { Slot.Padding(0, 0, 0, 15); });
-        PreferencesTabContainer = PrefsBuilder.Build();
-
-        // --- 4. COMBINE INTO MAIN SCROLL BOX ---
-        auto CombinedContent = UI::VerticalBox(MyWidget)
-            .AddToVerticalBox(DynPals::WidgetBuilder(SettingsTabContainer))
-            .AddToVerticalBox(DynPals::WidgetBuilder(PreferencesTabContainer));
-
-        auto MainScrollBoxBuilder = UI::ScrollBox(MyWidget).AddChild(CombinedContent);
-        MainScrollBoxObj = MainScrollBoxBuilder.Build();
-        if (MainScrollBoxObj) GetScrollOffsetFunc = MainScrollBoxObj->GetFunctionByNameInChain(STR("GetScrollOffset"));
-
-        auto MainContentConstrained = UI::SizeBox(MyWidget).HeightOverride(560.0f).AddChild(MainScrollBoxBuilder);
-
-        // --- 5. FULLSCREEN INPUT CAPTURE OVERLAY (ANCHORED PROPERLY) ---
-        auto OverlayBuilder = UI::Canvas(MyWidget)
-            .AddToCanvas(
-                UI::Border(MyWidget).BrushColor({0.0f, 0.0f, 0.0f, 0.90f}),
-                [](CanvasSlotBuilder& Slot) { Slot.Anchors(0.0, 0.0, 1.0, 1.0).Offsets(0, 0, 0, 0); }
-            )
-            .AddToCanvas(
-                UI::Text(MyWidget)
-                .Text(L"Press Any Key or Button...\n(Press ESC to cancel)")
-                .Font(PalFontCache, L"Bold", 28)
-                .TextColor({1.0f, 1.0f, 1.0f, 1.0f}),
-                [](CanvasSlotBuilder& Slot) { Slot.Anchors(0.5, 0.5, 0.5, 0.5).Alignment(0.5, 0.5).AutoSize(true); }
-            );
-        CaptureOverlay = OverlayBuilder.Build();
-        struct { uint8_t Vis; } OverlayInitialVis{ 1 }; // Starts Collapsed!
-        Utils::CallFunction(CaptureOverlay, STR("SetVisibility"), &OverlayInitialVis);
-
-        // Build Master WindowFrame
-        UObject* Canvas = UI::WindowFrame(MyWidget, 650.0f)
-            .SetHeader(HeaderBox)
-            .AddAutoScaledRow(TabLayout, 20.0f)
-            .AddContent(MainContentConstrained) 
-            .SetFooter(UI::ActionBar(MyWidget))
-            .Build(0.05, 0.5, 0.05, 0.5, 0.0, 0.5); 
-
-        // Attach Fullscreen Overlay to Canvas
-        struct { RC::Unreal::UObject* Content; RC::Unreal::UObject* ReturnValue; } AddOverlayParams{CaptureOverlay, nullptr};
-        Utils::CallFunction(Canvas, STR("AddChild"), &AddOverlayParams);
-        if (AddOverlayParams.ReturnValue) {
-            CanvasSlotBuilder Slot(AddOverlayParams.ReturnValue);
-            Slot.Anchors(0.0, 0.0, 1.0, 1.0).Offsets(0.0f, 0.0f, 0.0f, 0.0f).Alignment(0.0, 0.0);
-            struct { int32_t ZOrder; } ZParams{99999};
-            Utils::CallFunction(AddOverlayParams.ReturnValue, STR("SetZOrder"), &ZParams);
-        }
-
-        UObject* WidgetTree = nullptr;
-        if (Utils::GetPropertyValue(MyWidget, STR("WidgetTree"), WidgetTree) && WidgetTree) {
-            FProperty* RootProp = Utils::GetProperty(WidgetTree, STR("RootWidget"));
-            if (RootProp) *RootProp->ContainerPtrToValuePtr<UObject*>(WidgetTree) = Canvas;
-        }
-
-        struct { int32_t ZOrder; } ViewportParams{9999};
-        Utils::CallFunction(MyWidget, STR("AddToViewport"), &ViewportParams);
-
-        // Initialize active tab visibility cleanly
-        SwitchTab(ActiveTab);
-    }
-
-
-    RC::Unreal::UObject* UIManager::GetDesiredFocusTarget() const {
-        if (ActiveTab == 0 && RerollButton && RerollButton->GetWidget()) {
-            return RerollButton->GetWidget();
-        }
-        if (ActiveTab == 1 && BindMenuBtn && BindMenuBtn->GetWidget()) {
-            return BindMenuBtn->GetWidget();
-        }
-        return MyWidget;
-    }
-
-
-    void UIManager::RefreshUI() {
-        if (!TargetPal || !DynamicLogBox || !DynamicMorphBox || !CameraRotationContainer) return;
-
-        const FLinearColor_UE5 PalBlue = {0.78f, 0.96f, 1.0f, 1.0f}; 
-        const FLinearColor_UE5 White   = {1.0f, 1.0f, 1.0f, 1.0f};
-        const FLinearColor_UE5 Emerald = {0.063f, 0.725f, 0.506f, 1.0f};
-
-        // Clear visual containers
-        Utils::CallFunction(CameraRotationContainer, STR("ClearChildren"));
-        Utils::CallFunction(DynamicMorphBox, STR("ClearChildren"));
-        Utils::CallFunction(DynamicLogBox, STR("ClearChildren"));
-
-        // Helper lambda: Consolidated VBox child addition with padding
-        auto AddToVBox = [](UObject* Container, UObject* Widget, float Bottom = 10.0f, float Left = 0.0f, float Top = 0.0f, float Right = 0.0f) {
-            if (!Container || !Widget) return;
-            struct { UObject* Content; UObject* ReturnValue; } Params{Widget, nullptr};
-            Utils::CallFunction(Container, STR("AddChildToVerticalBox"), &Params);
-            if (Params.ReturnValue) {
-                DynPals::BoxSlotBuilder Slot(Params.ReturnValue);
-                Slot.Padding(Left, Top, Right, Bottom);
-            }
-        };
+    void UIManager::FillSettings() {
+        S->PackRows.clear();
+        S->PackConfigs.clear();
+        if (!S->Settings.IsValid() || !TargetPal) return;
 
         PalPersistData* currentPersist = SaveManager::Get().GetPersistData(TargetInstanceID);
-
-        // 1. Dynamic Header Text Update
-        if (HeaderTextObj) {
-            std::wstring headerStr = L"DYN PALS: " + TargetCharID;
-            if (currentPersist && currentPersist->bIsManuallyLocked) {
-                headerStr += L" [LOCKED]";
-            }
-            DynPals::Utils::SetTextSafely(HeaderTextObj, STR("SetText"), headerStr);
-        }
 
         // 2. Fetch Pal Statistics
         bool IsRare = false, IsWild = false;
@@ -1110,232 +823,98 @@ namespace DynPals {
             newDropdownConfigIndices.push_back(-1);
         }
 
-        bool bOptionsChanged = (newDropdownOptions.size() != DropdownOptions.size());
-        if (!bOptionsChanged) {
-            for (size_t i = 0; i < newDropdownOptions.size(); ++i) {
-                if (newDropdownOptions[i] != DropdownOptions[i] || newDropdownConfigIndices[i] != DropdownConfigIndices[i]) {
-                    bOptionsChanged = true;
-                    break;
+
+        // 3. Swap picker: one choice row per pack.
+        S->Settings.AddHeader("Current Swap");
+        std::vector<std::string> Labels;
+        std::vector<int> Configs;
+        std::wstring PackName;
+        const auto EndPack = [&]() {
+            if (Labels.empty()) return;
+            std::size_t Selected = PALUI_NO_INDEX;
+            for (std::size_t i = 0; i < Configs.size(); ++i) {
+                if (Configs[i] == persistConfigIndex) Selected = i;
+            }
+            const std::size_t Pack = S->PackRows.size();
+            S->Settings.AddHeader(Utils::WStringToString(PackName));
+            S->PackRows.push_back(S->Settings.AddChoices(Labels, Selected, [this, Pack](std::size_t Index) {
+                if (Pack >= S->PackConfigs.size() || Index >= S->PackConfigs[Pack].size()) return;
+                PalProcessor::Get().ForceSwap(TargetPal, S->PackConfigs[Pack][Index]);
+                for (std::size_t Other = 0; Other < S->PackRows.size(); ++Other) {
+                    if (Other != Pack) S->PackRows[Other].SetIndex(std::nullopt);
                 }
-            }
-        }
-
-        int initialIdx = -1;
-        if (persistConfigIndex != -1) {
-            for (size_t i = 0; i < newDropdownConfigIndices.size(); ++i) {
-                if (newDropdownConfigIndices[i] == persistConfigIndex) {
-                    initialIdx = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-
-        static std::wstring lastTargetInstanceID = L"";
-        static int lastPersistConfigIndex = -999;
-
-        if (bOptionsChanged || TargetInstanceID != lastTargetInstanceID || persistConfigIndex != lastPersistConfigIndex) {
-            DropdownOptions = std::move(newDropdownOptions);
-            DropdownConfigIndices = std::move(newDropdownConfigIndices);
-            lastTargetInstanceID = TargetInstanceID;
-            lastPersistConfigIndex = persistConfigIndex;
-
-            if (SkinDropdown) {
-                SkinDropdown->SetOptions(DropdownOptions, initialIdx);
-            }
-        }
-
-        // 4. Text Widget Pooling Lambda
-        int logTextUsed = 0;
-        auto GetPooledText = [&](const std::wstring& TextStr, const FLinearColor_UE5& Color, int32_t FontSize, const wchar_t* Typeface) -> RC::Unreal::UObject* {
-            RC::Unreal::UObject* TextObj = nullptr;
-            if (logTextUsed < LogTextPool.size()) {
-                TextObj = LogTextPool[logTextUsed];
-                if (!Utils::IsObjectValid(TextObj)) {
-                    TextObj = UI::Text(MyWidget).Build();
-                    LogTextPool[logTextUsed] = TextObj;
-                } else {
-                    Utils::CallFunction(TextObj, STR("RemoveFromParent"));
-                }
-            } else {
-                TextObj = UI::Text(MyWidget).Build();
-                LogTextPool.push_back(TextObj);
-            }
-            logTextUsed++;
-
-            DynPals::Utils::SetTextSafely(TextObj, STR("SetText"), TextStr);
-            DynPals::UI::SetTextColor(TextObj, Color);
-            
-            FProperty* FontProp = Utils::GetProperty(TextObj, STR("Font"));
-            if (FontProp) {
-                void* FontPtr = FontProp->ContainerPtrToValuePtr<void>(TextObj);
-                if (FontPtr) {
-                    FStructProperty* StructProp = static_cast<FStructProperty*>(FontProp);
-                    if (StructProp && StructProp->GetStruct()) {
-                        UStruct* FontStruct = StructProp->GetStruct();
-                        if (PalFontCache) {
-                            FProperty* ObjProp = FontStruct->GetPropertyByNameInChain(STR("FontObject"));
-                            if (ObjProp) *ObjProp->ContainerPtrToValuePtr<UObject*>(FontPtr) = PalFontCache;
-                        }
-                        FProperty* NameProp = FontStruct->GetPropertyByNameInChain(STR("TypefaceFontName"));
-                        if (NameProp) *NameProp->ContainerPtrToValuePtr<FName>(FontPtr) = FName(Typeface, FNAME_Add);
-                        FProperty* SizeProp = FontStruct->GetPropertyByNameInChain(STR("Size"));
-                        if (SizeProp) *SizeProp->ContainerPtrToValuePtr<int32_t>(FontPtr) = FontSize;
-                    }
-                }
-                Utils::CallFunction(TextObj, STR("SetFont"), FontPtr);
-            }
-
-            auto* WrapProp = Utils::GetProperty(TextObj, STR("AutoWrapText"));
-            if (WrapProp) {
-                bool* pWrap = WrapProp->ContainerPtrToValuePtr<bool>(TextObj);
-                if (pWrap) *pWrap = true;
-            }
-
-            struct { uint8_t InVisibility; } VisParams{ 0 }; 
-            Utils::CallFunction(TextObj, STR("SetVisibility"), &VisParams);
-
-            return TextObj;
+                bNeedsRefresh = true;
+            }));
+            S->PackConfigs.push_back(Configs);
+            Labels.clear();
+            Configs.clear();
         };
+        for (std::size_t i = 0; i < newDropdownOptions.size(); ++i) {
+            const std::wstring& Option = newDropdownOptions[i];
+            if (newDropdownConfigIndices[i] == -1) {
+                EndPack();
+                if (Option.rfind(L"[ ", 0) == 0) {
+                    PackName = Option.substr(2, Option.size() >= 4 ? Option.size() - 4 : 0);
+                } else {
+                    S->Settings.AddLabel(Utils::WStringToString(Option.substr(Option.find_first_not_of(L' '))));
+                }
+                continue;
+            }
+            Labels.push_back(Utils::WStringToString(Option.substr(Option.find_first_not_of(L' '))));
+            Configs.push_back(newDropdownConfigIndices[i]);
+        }
+        EndPack();
+
+        S->Settings.AddButton("Reroll Pal", [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; });
+        S->Settings.AddButton("Reset Pal", [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } });
+        S->Settings.AddSwitch("Hide Invalid", bHideInvalidSwaps, [this](bool bState) { bHideInvalidSwaps = bState; bNeedsRefresh = true; });
+        S->Settings.AddSwitch("Focus Pal Camera", SaveManager::Get().Settings.bFocusPal, [this](bool bState) {
+            SaveManager::Get().Settings.bFocusPal = bState; SaveManager::Get().SaveWorldData();
+            if (bState) EnablePalCamera(); else DisablePalCamera();
+            bNeedsRefresh = true; 
+        });
 
         // 5. Camera Controls (Relative Switch + Rotation Slider)
         if (SaveManager::Get().Settings.bFocusPal) {
-            RelativeCameraSwitch = std::make_unique<UI::Switch>(MyWidget, SaveManager::Get().Settings.bRelativeCamera);
-            RelativeCameraSwitch->OnChanged([this](bool bState) {
+            S->Settings.AddSwitch("Relative Camera", SaveManager::Get().Settings.bRelativeCamera, [this](bool bState) {
                 SaveManager::Get().Settings.bRelativeCamera = bState;
                 SaveManager::Get().SaveWorldData();
                 UpdatePalCameraRotation(SaveManager::Get().Settings.CameraRotation);
             });
-
-            auto ShrunkSwitch = UI::Scaled(MyWidget, DynPals::WidgetBuilder(RelativeCameraSwitch->GetWidget()), 0.6f);
-
-            auto RelativeCamRow = UI::HorizontalBox(MyWidget)
-                .AddToHorizontalBox(ShrunkSwitch, [](DynPals::BoxSlotBuilder& Slot) { 
-                    Slot.Padding(0, 0, 8, 0).VerticalAlignment(DynPals::EBuilderVerticalAlignment::VAlign_Center); 
-                })
-                .AddToHorizontalBox(UI::Text(MyWidget).Text(L"Relative Camera").Font(PalFontCache, L"Medium", 15).TextColor(FLinearColor_UE5{0.85f, 0.85f, 0.85f, 1.0f}), [](DynPals::BoxSlotBuilder& Slot) { 
-                    Slot.VerticalAlignment(DynPals::EBuilderVerticalAlignment::VAlign_Center); 
-                });
-
-            AddToVBox(CameraRotationContainer, RelativeCamRow.Build(), 12.0f, 25.0f);
-
-            CameraRotationSlider = std::make_unique<UI::Slider>(MyWidget, 0.0, 360.0, SaveManager::Get().Settings.CameraRotation);
-            CameraRotationSlider->OnChanged([this](double NewValue) {
+            S->Settings.AddSlider("Camera Rotation", SaveManager::Get().Settings.CameraRotation, 0.0, 360.0, [this](double NewValue) {
                 SaveManager::Get().Settings.CameraRotation = NewValue;
                 UpdatePalCameraRotation(NewValue);
                 TriggerSaveDebounced(); // <--- Debounce disk write!
             });
-
-
-            AddToVBox(CameraRotationContainer, GetPooledText(L"Camera Rotation", White, 18, L"Medium"), 0.0f);
-            AddToVBox(CameraRotationContainer, CameraRotationSlider->GetWidget(), 20.0f, 0.0f, 5.0f);
-        } else {
-            RelativeCameraSwitch = nullptr;
-            CameraRotationSlider = nullptr;
         }
 
         // 6. Dynamic Size Slider
-        Utils::CallFunction(SizeSliderContainer, STR("ClearChildren"));
-        SizeSlider = nullptr;
-
         if (currentPersist && persistConfigIndex != -1) {
             auto& activeCfg = ConfigManager::Get().GetConfigs()[persistConfigIndex];
             if (activeCfg.MinSizeMultiplier < activeCfg.MaxSizeMultiplier) {
                 double currentVal = currentPersist->SizeMultiplier > 0.0 ? currentPersist->SizeMultiplier : 1.0;
                 currentVal = std::clamp(currentVal, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier);
-
-                SizeSlider = std::make_unique<UI::Slider>(MyWidget, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier, currentVal);
-                SizeSlider->OnChanged([this](double NewValue) {
-                    LastObservedSize = NewValue;
-
-                    PalPersistData* p = SaveManager::Get().GetPersistData(TargetInstanceID);
-                    if (p) {
-                        p->SizeMultiplier = NewValue;
-                        SaveManager::Get().SetPersistData(TargetInstanceID, *p, false); // <--- Pass false (memory only)
-
-                        if (TargetPal && Utils::IsObjectValid(TargetPal)) {
-                            UObject* MeshComp = nullptr;
-                            Utils::CallFunction(TargetPal, STR("GetMainMesh"), &MeshComp);
-                            if (MeshComp && Utils::IsObjectValid(MeshComp)) {
-                                UClass* CharClass = TargetPal->GetClassPrivate();
-                                if (CharClass) {
-                                    UObject* CDO = CharClass->GetClassDefaultObject();
-                                    UObject* VanillaMesh = nullptr;
-                                    if (CDO) Utils::GetPropertyValue<UObject*>(CDO, STR("Mesh"), VanillaMesh);
-                                    
-                                    FVector_UE5 BaseScale{ 1.0, 1.0, 1.0 };
-                                    if (VanillaMesh) {
-                                        FVector_UE5 CDOScale{ 1.0, 1.0, 1.0 };
-                                        if (Utils::GetPropertyValue<FVector_UE5>(VanillaMesh, STR("RelativeScale3D"), CDOScale)) {
-                                            if (CDOScale.X > 0.001 && CDOScale.Y > 0.001 && CDOScale.Z > 0.001) BaseScale = CDOScale;
-                                        }
-                                    }
-
-                                    if (NewValue <= 0.001) NewValue = 1.0;
-                                    FVector_UE5 FinalMeshScale{ BaseScale.X * NewValue, BaseScale.Y * NewValue, BaseScale.Z * NewValue };
-
-                                    Utils::SetPropertyValue<FVector_UE5>(MeshComp, STR("DefaultScale3D"), FinalMeshScale);
-                                    struct { FVector_UE5 NewScale3D; } ScaleParams{ FinalMeshScale };
-                                    Utils::CallFunction(MeshComp, STR("SetRelativeScale3D"), &ScaleParams);
-                                }
-                            }
-                        }
-                    }
+                S->Settings.AddSlider("Size Adjustment", currentVal, activeCfg.MinSizeMultiplier, activeCfg.MaxSizeMultiplier, [this](double NewValue) {
+                    ApplySize(NewValue);
                     TriggerSaveDebounced(); // <--- Debounce disk write!
                 });
-
-
-                AddToVBox(SizeSliderContainer, GetPooledText(L"Size Adjustment", Emerald, 18, L"Bold"), 0.0f);
-                AddToVBox(SizeSliderContainer, SizeSlider->GetWidget(), 15.0f, 0.0f, 5.0f);
             }
         }
 
         // 7. Shape Keys / Morph Sliders
-        ActiveMorphSlidersCount = 0;
         if (currentPersist && persistConfigIndex != -1) {
             auto& activeCfg = ConfigManager::Get().GetConfigs()[persistConfigIndex];
             if (!activeCfg.MorphTargetList.empty()) {
-                AddToVBox(DynamicMorphBox, GetPooledText(L"Morph Targets", Emerald, 20, L"Bold"), 10.0f);
-
-                int slidersUsed = 0;
+                S->Settings.AddHeader("Morph Targets");
                 for (auto& morph : activeCfg.MorphTargetList) {
                     if (morph.type != L"Restrict" && morph.minVal < morph.maxVal) {
-                        float currentVal = (float)currentPersist->MorphSet[morph.target];
-                        AddToVBox(DynamicMorphBox, GetPooledText(morph.target, White, 18, L"Medium"), 0.0f);
-
-                        class DynPals::UI::Slider* SliderCtrl = nullptr;
-                        if (slidersUsed < static_cast<int>(MorphSliderPool.size())) {
-                            SliderCtrl = MorphSliderPool[slidersUsed].get();
-                            RC::Unreal::UObject* SliderW = SliderCtrl->GetWidget();
-                            if (Utils::IsObjectValid(SliderW)) Utils::CallFunction(SliderW, STR("RemoveFromParent"));
-                            SliderCtrl->UpdateValue(currentVal, morph.minVal, morph.maxVal);
-                        } else {
-                            auto NewSlider = std::make_unique<class DynPals::UI::Slider>(MyWidget, morph.minVal, morph.maxVal, currentVal);
-                            SliderCtrl = NewSlider.get();
-                            MorphSliderPool.push_back(std::move(NewSlider));
-                        }
-                        slidersUsed++;
-
-                        SliderCtrl->OnChanged([this, morphName = morph.target](double NewValue) {
-                            PalPersistData* p = SaveManager::Get().GetPersistData(TargetInstanceID);
-                            if (p) {
-                                p->MorphSet[morphName] = NewValue;
-                                SaveManager::Get().SetPersistData(TargetInstanceID, *p, false); // <--- Pass false (memory only)
-                                
-                                UObject* MeshComp = nullptr;
-                                Utils::CallFunction(TargetPal, STR("GetMainMesh"), &MeshComp);
-                                if (MeshComp) {
-                                    struct { FName MorphTargetName; float Value; bool bRemoveZeroWeight; } MorphParams{
-                                        FName(morphName.c_str(), FNAME_Add), static_cast<float>(NewValue), false
-                                    };
-                                    Utils::CallFunction(MeshComp, STR("SetMorphTarget"), &MorphParams);
-                                }
-                            }
+                        const double currentVal = currentPersist->MorphSet[morph.target];
+                        S->Settings.AddSlider(Utils::WStringToString(morph.target), currentVal, morph.minVal, morph.maxVal, [this, MorphName = morph.target](double NewValue) {
+                            ApplyMorph(MorphName, NewValue);
                             TriggerSaveDebounced(); // <--- Debounce disk write!
                         });
-                        AddToVBox(DynamicMorphBox, SliderCtrl->GetWidget(), 15.0f, 0.0f, 5.0f);
                     }
                 }
-                ActiveMorphSlidersCount = slidersUsed;
             }
         }
 
@@ -1343,19 +922,19 @@ namespace DynPals {
         if (currentPersist && currentPersist->SizeMultiplier > 0.0 && std::abs(currentPersist->SizeMultiplier - 1.0) > 0.005) {
             wchar_t sizeBuf[32];
             swprintf(sizeBuf, 32, L"Size Modifier: %.2fx", currentPersist->SizeMultiplier);
-            AddToVBox(DynamicLogBox, GetPooledText(sizeBuf, PalBlue, 18, L"Bold"), 10.0f);
+            S->Settings.AddLabel(Utils::WStringToString(sizeBuf));
         }
         
-        AddToVBox(DynamicLogBox, GetPooledText(L"Matchmaker Log", Emerald, 20, L"Bold"), 10.0f);
+        S->Settings.AddHeader("Matchmaker Log");
 
         if (evaluations.empty()) {
-            AddToVBox(DynamicLogBox, GetPooledText(L"No swaps configured for this Pal.", White, 16, L"Regular"), 0.0f);
+            S->Settings.AddLabel(Utils::WStringToString(L"No swaps configured for this Pal."));
         } else {
             for (const auto& eval : evaluations) {
                 if (bHideInvalidSwaps && !eval.IsValid) continue;
 
                 auto& cfg = ConfigManager::Get().GetConfigs()[eval.ConfigIndex];
-                AddToVBox(DynamicLogBox, GetPooledText(cfg.PackName, White, 16, L"Bold"), 0.0f);
+                S->Settings.AddLabel(Utils::WStringToString(cfg.PackName));
 
                 // --- 1. Prioritize SwapLabel ---
                 std::wstring displayLabel = StripFallbackHash(cfg.SwapLabel);
@@ -1388,8 +967,6 @@ namespace DynPals {
                     pct = (cfg.SpawnWeight * 100.0) / totalTiedWeight;
                 }
 
-                FLinearColor_UE5 textColor = eval.IsValid ? (eval.Score < 0 ? PalBlue : (eval.Score == 0 ? Emerald : FLinearColor_UE5{0.960f, 0.620f, 0.043f, 1.0f})) : FLinearColor_UE5{0.850f, 0.150f, 0.150f, 1.0f};
-
                 std::wstring logStr;
                 if (eval.IsValid) {
                     wchar_t pctBuf[16];
@@ -1401,46 +978,28 @@ namespace DynPals {
                         logStr += L" (" + eval.RejectionReason + L")";
                     }
                 }
-                AddToVBox(DynamicLogBox, GetPooledText(logStr, textColor, 16, L"Medium"), 8.0f);
+                S->Settings.AddLabel(Utils::WStringToString(logStr));
             }
         }
 
-        // 9. Move unused pooled elements to Trash Bin
-        for (size_t i = logTextUsed; i < LogTextPool.size(); ++i) {
-            RC::Unreal::UObject* UnusedTxt = LogTextPool[i];
-            if (Utils::IsObjectValid(UnusedTxt)) {
-                Utils::CallFunction(UnusedTxt, STR("RemoveFromParent"));
-                struct { RC::Unreal::UObject* Content; RC::Unreal::UObject* ReturnValue; } AddT{UnusedTxt, nullptr};
-                Utils::CallFunction(WidgetTrashBin, STR("AddChildToVerticalBox"), &AddT);
-            }
-        }
-
-        for (size_t i = ActiveMorphSlidersCount; i < MorphSliderPool.size(); ++i) {
-            RC::Unreal::UObject* UnusedSlider = MorphSliderPool[i]->GetWidget();
-            if (Utils::IsObjectValid(UnusedSlider)) {
-                Utils::CallFunction(UnusedSlider, STR("RemoveFromParent"));
-                struct { RC::Unreal::UObject* Content; RC::Unreal::UObject* ReturnValue; } AddS{UnusedSlider, nullptr};
-                Utils::CallFunction(WidgetTrashBin, STR("AddChildToVerticalBox"), &AddS);
-            }
-        }
-
-        if (LastScrollOffset > 0.0f && MainScrollBoxObj) {
-            struct { float NewScrollOffset; } ScrollParams{LastScrollOffset};
-            Utils::CallFunction(MainScrollBoxObj, STR("SetScrollOffset"), &ScrollParams);
-        }
     }
 
-    void UIManager::OnTickUI() {
-        if (TargetPal && !Utils::IsObjectValid(TargetPal)) {
-            TargetPal = nullptr;
-            RequestToggle(); 
+    void UIManager::Tick() {
+        if (!S->Window) return;
+
+        if (bWasOpen && !S->Window->IsOpen()) {
+            OnClosed();
+            return;
+        }
+        if (S->bCloseRequested || !TargetPal || !Utils::IsObjectValid(TargetPal)) {
+            Close();
             return;
         }
 
         // 1. Tick the standalone InputManager if in capture mode
         if (InputManager::Get().IsCapturing()) {
             InputManager::Get().Tick(CurrentPlayerController);
-            return; // Suppress normal clicks while listening
+            return;
         }
 
         // 2. Debounced save
@@ -1461,37 +1020,17 @@ namespace DynPals {
                 bNeedsRefresh = true;
             }
         }
-        
-        if (bNeedsRefresh && ActiveTab == 0) { 
-            bNeedsRefresh = false; 
-            RefreshUI(); 
-        }
 
-        // 4. Tick tabs and visible components
-        if (TabBtn1) TabBtn1->Tick();
-        if (TabBtn2) TabBtn2->Tick();
-
-        if (ActiveTab == 0) {
-            if (SkinDropdown)         SkinDropdown->Tick();
-            if (HideInvalidSwitch)    HideInvalidSwitch->Tick();
-            if (RerollButton)         RerollButton->Tick();
-            if (ResetButton)          ResetButton->Tick();
-            if (FocusPalSwitch)       FocusPalSwitch->Tick();
-            if (RelativeCameraSwitch) RelativeCameraSwitch->Tick();
-            if (CameraRotationSlider) CameraRotationSlider->Tick();
-            if (SizeSlider)           SizeSlider->Tick();
-
-            for (int i = 0; i < ActiveMorphSlidersCount; ++i) {
-                if (i < static_cast<int>(MorphSliderPool.size())) MorphSliderPool[i]->Tick();
+        if (bNeedsRefresh) {
+            bNeedsRefresh = false;
+            if (S->Settings.Clear()) {
+                FillSettings();
+                PalPersistData* currentPersist = SaveManager::Get().GetPersistData(TargetInstanceID);
+                const bool bLocked = currentPersist && currentPersist->bIsManuallyLocked;
+                S->Window->SetTitleBar(Utils::WStringToString(L"DYN PALS: " + TargetCharID), bLocked ? "LOCKED" : "");
+            } else if (S->Window->Reset()) {
+                Fill();
             }
-        } else if (ActiveTab == 1) {
-            if (BindMenuBtn)     BindMenuBtn->Tick();
-            if (BindTestMenuBtn) BindTestMenuBtn->Tick();
-            if (BindRerollBtn)   BindRerollBtn->Tick();
         }
-        
-        CacheScrollOffset();
-
-
     }
 }

@@ -35,9 +35,6 @@ set(COMMON_SRC_FILES
     "src/safetyhook.cpp" 
     "src/InputManager.cpp" 
     
-    "src/UI/UIBase.cpp"       
-    "src/UI/UIRegistry.cpp"   
-    "src/UI/Views/TestUI.cpp"      
     "src/UI/Views/UIManager.cpp"  
     "src/NativeAsyncLoader.cpp"  
     "src/SettingsStore.cpp"
@@ -49,6 +46,7 @@ set(COMMON_SRC_FILES
 add_library(DynamicPals SHARED ${COMMON_SRC_FILES} "src/updater.cpp")
 target_include_directories(DynamicPals PRIVATE 
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/deps/pal-ui-lib/include"
     "RE-UE4SS/UE4SS/include"
     "RE-UE4SS/deps/first/Unreal/include"
     "RE-UE4SS/deps/first/DynamicOutput/include"
@@ -64,6 +62,7 @@ target_link_libraries(DynamicPals PUBLIC UE4SS Zydis wininet PRIVATE PalCore::Ru
 add_library(DynamicPals_Offline SHARED ${COMMON_SRC_FILES} "src/Updater_Offline.cpp")
 target_include_directories(DynamicPals_Offline PRIVATE 
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/deps/pal-ui-lib/include"
     "RE-UE4SS/UE4SS/include"
     "RE-UE4SS/deps/first/Unreal/include"
     "RE-UE4SS/deps/first/DynamicOutput/include"

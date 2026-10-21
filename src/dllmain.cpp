@@ -14,11 +14,12 @@
 #include "NativeAsyncLoader.hpp"
 
 #include "UI/Views/UIManager.hpp" 
-#include "UI/Views/TestUI.hpp"
-#include "UI/UIRegistry.hpp"
 #include "PalProcessor.hpp"
 
 #include <PalCore/Runtime/GameThread.hpp>
+#include <PalUI/Client.hpp>
+
+#include <optional>
 
 using namespace RC;
 using namespace RC::Unreal;
@@ -56,7 +57,7 @@ public:
             bWasTracked = true;
             sources.push_back(STR("NativeAsyncLoader"));
         }
-        if (DynPals::UIRegistry::Get().OnUObjectDeleted(Obj)) {
+        if (DynPals::UIManager::Get().OnUObjectDeleted(Obj)) {
             bWasTracked = true;
             sources.push_back(STR("UI"));
         }
@@ -109,6 +110,8 @@ public:
     ~DynPalsMod() override 
     {
         GGCListener.Unregister();
+        DynPals::UIManager::Get().Detach();
+        UI.reset();
         PalCore::GameThread::Tasks().RemoveFrameCallback(ConfigPoll);
         if (bStarted) PalCore::GameThread::Stop();
     }
@@ -120,6 +123,15 @@ public:
         bStarted = PalCore::GameThread::Start(STR("DynamicPals"));
         if (!bStarted) DP_LOG(Error, "pal-core's game-thread pump did not start");
         ConfigPoll = PalCore::GameThread::Tasks().AddFrameCallback([](float) { DynPals::SaveManager::Get().TickConfig(); });
+
+        UI.emplace("DynamicPals", [](std::uint8_t, std::string_view Context, std::string_view Message) {
+            DP_LOG(Warning, "[PalUI] {}: {}", DynPals::Utils::StringToWString(std::string(Context)), DynPals::Utils::StringToWString(std::string(Message)));
+        });
+        if (!UI->IsConnected()) {
+            DP_LOG(Error, "PalUI.dll did not accept the connection; the Alt+N menu is off. Install the PalUI mod beside DynamicPals.");
+            UI.reset();
+        }
+        DynPals::UIManager::Get().Attach(UI ? &*UI : nullptr);
 
 
         // Register the listener safely
@@ -137,7 +149,6 @@ public:
             DynPals::VFXManager::Get().Initialize(); 
             DynPals::HooksManager::RegisterHooks();
 
-            DynPals::TestUI::Get();
             DynPals::UIManager::Get();
         }
     }
@@ -145,6 +156,7 @@ public:
 private:
     bool bStarted = false;
     std::uint64_t ConfigPoll = 0;
+    std::optional<PalUI::Client::Connection> UI;
 };
 
 #define DYNPALS_MOD_API __declspec(dllexport)

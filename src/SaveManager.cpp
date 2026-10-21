@@ -71,10 +71,6 @@ namespace DynPals {
     MenuKeyVK = InputManager::Get().KeyNameToVK(MenuKey);
     MenuModVK = InputManager::Get().KeyNameToVK(MenuModifier);
 
-    bTestIsGamepad = (TestMenuKey.rfind(L"Gamepad_", 0) == 0);
-    TestKeyVK = InputManager::Get().KeyNameToVK(TestMenuKey);
-    TestModVK = InputManager::Get().KeyNameToVK(TestMenuModifier);
-
     // --- CACHE REROLL KEYBIND ---
     bRerollIsGamepad = (RerollKey.rfind(L"Gamepad_", 0) == 0);
     RerollKeyVK = InputManager::Get().KeyNameToVK(RerollKey);

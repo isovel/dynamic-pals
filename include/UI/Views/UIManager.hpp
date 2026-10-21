@@ -1,74 +1,69 @@
 #pragma once
-#include "UI/UIBase.hpp"
-#include "UI/Components/Button.hpp"
-#include "UI/Components/Dropdown.hpp"
-#include "UI/Components/Slider.hpp"
-#include "UI/Components/Switch.hpp"
+#include <chrono>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 #include <Unreal/UObjectGlobals.hpp>
+
+namespace PalUI::Client { class Connection; }
 
 namespace DynPals {
 
-    struct ActiveMorphSlider {
-        std::wstring MorphTargetName;
-        std::unique_ptr<class DynPals::UI::Slider> SliderCtrl;
-    };
-
-    class UIManager : public UIBase {
+    // The Alt+N menu: a PalUI window over the pal in the crosshair. The PalUI
+    // state lives in the source file, so this header stays free of Windows.h.
+    class UIManager {
     public:
         static UIManager& Get() {
             static UIManager instance;
             return instance;
         }
 
-        void ToggleMenu() { RequestToggle(); }
-        bool IsMenuOpen() const { return IsOpen(); }
+        ~UIManager();
+
+        // Null when the PalUI mod is absent; the menu then only says so.
+        void Attach(PalUI::Client::Connection* InUI);
+        PalUI::Client::Connection* Connection() const { return UI; }
+
+        void Toggle(RC::Unreal::UObject* PlayerController);
+        bool IsMenuOpen() const;
+        // Rebuilds the open menu on the next tick, as after a config reload.
+        void RequestRebuild() { bNeedsRefresh = true; }
+        void Tick();
+        void CloseForUnload();
+        // Drops pointers to an object the engine has deleted; true when one was held.
+        bool OnUObjectDeleted(RC::Unreal::UObject* Obj);
+        // Drops the window before the connection it was made on.
+        void Detach();
+
+        // The game's OK/Cancel dialog; false without PalUI.
+        bool ShowChoice(const std::wstring& Message, std::function<void(bool)> OnResult);
 
         void PreloadUI(RC::Unreal::UObject* PC);
-        virtual RC::Unreal::UObject* GetDesiredFocusTarget() const override;
-
-    protected:
-        virtual bool OnSetup() override;
-        virtual void OnOpen() override;
-        virtual void OnClose() override;
-        virtual void OnInvalidate() override;
-        virtual void BuildWidget() override;
-        virtual void OnTickUI() override;
-        virtual bool OnUObjectDeleted(RC::Unreal::UObject* Obj) override;
 
     private:
-        UIManager() { bCloseOnEscape = true; }
-        
-        // --- Persistent Tab Architecture (No Destructive Rebuilds) ---
-        int32_t ActiveTab = 0;
-        RC::Unreal::UObject* Tab1Widget = nullptr;
-        RC::Unreal::UObject* Tab2Widget = nullptr;
-        std::unique_ptr<class DynPals::UI::Button> TabBtn1;
-        std::unique_ptr<class DynPals::UI::Button> TabBtn2;
+        UIManager();
 
-        RC::Unreal::UObject* SettingsTabContainer = nullptr;
-        RC::Unreal::UObject* PreferencesTabContainer = nullptr;
-        RC::Unreal::UObject* CaptureOverlay = nullptr;
+        struct State;
+        std::unique_ptr<State> S;
+        PalUI::Client::Connection* UI = nullptr;
+        bool bWarnedMissing = false;
 
-        std::unique_ptr<class DynPals::UI::Button> BindMenuBtn;
-        std::unique_ptr<class DynPals::UI::Button> BindTestMenuBtn;
-        std::unique_ptr<class DynPals::UI::Button> BindRerollBtn;
-
-        void SwitchTab(int32_t NewTab);
+        bool Open();
+        void Close();
+        void OnClosed();
+        void Fill();
+        void FillSettings();
+        void FillPreferences();
         void StartKeyCapture(int Target);
         std::wstring FormatKeybindText(const std::wstring& Modifier, const std::wstring& Key);
 
-        
-        RC::Unreal::UObject* PreloadContainer = nullptr;
-        
         void UpdateTarget();
-        void RefreshUI();
-        
+        void ApplySize(double NewValue);
+        void ApplyMorph(const std::wstring& MorphName, double NewValue);
+
         // --- Consolidated Helpers ---
         RC::Unreal::UObject* GetCameraBoom(RC::Unreal::UObject* Pal);
-        void CacheScrollOffset();
 
         // --- Debounced Save System ---
         bool bPendingDiskSave = false;
@@ -77,63 +72,28 @@ namespace DynPals {
         void TriggerSaveDebounced();
         void FlushPendingSave();
 
-
         // --- Camera Helper Methods ---
         void EnablePalCamera();
         void DisablePalCamera();
         void UpdatePalCameraRotation(double Yaw, bool bTeleport = false);
 
-
         // State Tracking
-        bool bHideInvalidSwaps = true; 
-        float LastScrollOffset = 0.0f;
+        bool bHideInvalidSwaps = true;
         bool bNeedsRefresh = false;
-        
+        bool bWasOpen = false;
+
         // Target Context
+        RC::Unreal::UObject* CurrentPlayerController = nullptr;
         RC::Unreal::UObject* TargetPal = nullptr;
         std::wstring TargetInstanceID = L"";
         std::wstring TargetCharID = L"";
-
-        // Smart Controllers
-        std::unique_ptr<class DynPals::UI::Dropdown> SkinDropdown;
-        std::unique_ptr<class DynPals::UI::Switch> HideInvalidSwitch;
-        std::unique_ptr<class DynPals::UI::Button> RerollButton;
-        std::unique_ptr<class DynPals::UI::Button> ResetButton;
-        std::vector<std::unique_ptr<class DynPals::UI::Slider>> MorphSliderPool;
-        int ActiveMorphSlidersCount = 0;
-        
-        // UI Elements
-        std::unique_ptr<class DynPals::UI::Switch> FocusPalSwitch;
-        std::unique_ptr<class DynPals::UI::Switch> RelativeCameraSwitch;
-        std::unique_ptr<class DynPals::UI::Slider> CameraRotationSlider;
-        std::unique_ptr<class DynPals::UI::Slider> SizeSlider; // <--- Size Slider Controller
-
-        // Native Widget Persistent Containers
-        RC::Unreal::UObject* MainScrollBoxObj = nullptr;
-        RC::Unreal::UFunction* GetScrollOffsetFunc = nullptr; 
-        
-        RC::Unreal::UObject* DynamicMorphBox = nullptr;
-        RC::Unreal::UObject* DynamicLogBox = nullptr;
-        RC::Unreal::UObject* CameraRotationContainer = nullptr;
-        RC::Unreal::UObject* SizeSliderContainer = nullptr;     // <--- Size Slider Container
-        RC::Unreal::UObject* PalFontCache = nullptr;
-        
-        RC::Unreal::UObject* HeaderTextObj = nullptr;
-        RC::Unreal::UObject* WidgetTrashBin = nullptr;
 
         // Auto-refresh state trackers
         double LastObservedSize = -999.0;                      // <--- Size Tracker
         std::wstring LastObservedLabel = L"";                  // <--- Swap Tracker
 
-        // Data Models
-        std::vector<std::wstring> DropdownOptions;
-        std::vector<int> DropdownConfigIndices;
-
-        // Text Widget Pool for Logging
-        std::vector<RC::Unreal::UObject*> LogTextPool;
-
         // Camera Members
-        RC::Unreal::UObject* OriginalViewTarget = nullptr; 
-        bool bIsPalCameraActive = false;                   
+        RC::Unreal::UObject* OriginalViewTarget = nullptr;
+        bool bIsPalCameraActive = false;
     };
 }
