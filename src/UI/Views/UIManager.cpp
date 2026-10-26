@@ -32,19 +32,18 @@ namespace DynPals {
         std::vector<PalUI::Client::Row> PackRows;
         std::vector<std::vector<int>> PackConfigs;
         PalUI::Client::Row CaptureRow;
+        // The native key rows, by capture target; invalid on a PalUI without them.
+        PalUI::Client::Row MenuBindRow;
+        PalUI::Client::Row RerollBindRow;
         std::optional<PalUI::Client::Dialog> Choice;
         std::deque<std::pair<std::wstring, std::function<void(bool)>>> Choices;
         bool bCloseRequested = false;
-        // PalUI takes one title bar per build, so a changed lock state rebuilds the window.
+        // The lock state the title icon shows, so a refresh updates it only on a change.
         bool bShownLocked = false;
-        // The PalUI build has the Inspector's pieces: placement, the corner column, icon checks and screen drags.
-        bool bInspector = false;
         // Unlit each time the menu opens, so a drag on open screen turns the camera at once.
         bool bRotationLocked = false;
         // The game's HUD was hidden for the Inspector, so closing shows it again.
         bool bHUDHidden = false;
-        // Reroll and Reset stand in the footer, so the Inspector page leaves them out.
-        bool bFooterActions = false;
     };
 
     static constexpr std::string_view kHideInvalidIcon = "/Game/Pal/Texture/UI/Main_Menu/T_icon_option_visibility_hide.T_icon_option_visibility_hide";
@@ -243,12 +242,9 @@ namespace DynPals {
 
             // D. Zero out shoulder offsets; beside the Inspector the camera steps left so the pal sits mid-way right of it
             FVector ZeroVec{ 0.0, 0.0, 0.0 };
-            double Side = 0.0;
-            if (S->bInspector) {
-                float Fov = 90.0f;
-                if (FollowCameraObj) Utils::GetPropertyValue<float>(FollowCameraObj, STR("FieldOfView"), Fov);
-                Side = CentredSideOffset(InspectorRightEdge(CurrentPlayerController), optimalDistance, Fov);
-            }
+            float Fov = 90.0f;
+            if (FollowCameraObj) Utils::GetPropertyValue<float>(FollowCameraObj, STR("FieldOfView"), Fov);
+            const double Side = CentredSideOffset(InspectorRightEdge(CurrentPlayerController), optimalDistance, Fov);
             FVector SideVec{ 0.0, Side, 0.0 };
             Utils::SetPropertyValue<FVector>(CameraBoomObj, STR("WalkCameraOffset"), ZeroVec);
             Utils::SetPropertyValue<FVector>(CameraBoomObj, STR("SocketOffset"), SideVec);
@@ -532,7 +528,7 @@ namespace DynPals {
 
     PalUI::Client::Row UIManager::Built(PalUI::Client::Row Row, const char* Kind) {
         if (!Row.IsValid() && LoggedKinds.insert(Kind).second) {
-            DP_LOG(Warning, "PalUI could not build a {} row; the installed PalUI may be older than this build expects.", Utils::StringToWString(Kind));
+            DP_LOG(Warning, "PalUI could not build a {} row.", Utils::StringToWString(Kind));
         }
         return Row;
     }
@@ -566,8 +562,8 @@ namespace DynPals {
         S->Window.emplace(*UI);
         S->Window->SetSize(kMenuWidth, kMenuHeight);
         // Pinned left as the original menu was, so the pal stays in view.
-        S->bInspector = S->Window->SetPlacement(kMenuPlacement);
-        if (S->bInspector) S->Window->SetShowsCloseButton(false);
+        S->Window->SetPlacement(kMenuPlacement);
+        S->Window->SetShowsCloseButton(false);
         S->bRotationLocked = false;
         if (!S->Window->Open()) {
             S->Window.reset();
@@ -593,7 +589,7 @@ namespace DynPals {
         if (SaveManager::Get().Settings.bFocusPal) {
             EnablePalCamera();
         }
-        if (S->bInspector && SaveManager::Get().Settings.bHideHUD) {
+        if (SaveManager::Get().Settings.bHideHUD) {
             SetGameHUDVisible(CurrentPlayerController, false);
             S->bHUDHidden = true;
         }
@@ -631,6 +627,8 @@ namespace DynPals {
         LastObservedLabel = L"";
 
         S->CaptureRow = {};
+        S->MenuBindRow = {};
+        S->RerollBindRow = {};
         S->PackRows.clear();
         S->PackConfigs.clear();
         S->Settings = {};
@@ -658,14 +656,11 @@ namespace DynPals {
     }
 
     void UIManager::Fill() {
-        S->Settings = S->Window->AddTab(S->bInspector ? "Inspector" : "Settings");
+        S->Settings = S->Window->AddTab("Inspector");
         S->Prefs = S->Window->AddTab("Preferences");
-        S->bFooterActions = false;
-        if (S->bInspector) {
-            PalUI::Client::Page Footer = S->Window->Footer();
-            if (Footer.IsValid()) Built(Footer.AddRule(), "Rule");
-            S->bFooterActions = Footer.IsValid() && AddActions(Footer);
-        }
+        PalUI::Client::Page Footer = S->Window->Footer();
+        Built(Footer.AddRule(), "Rule");
+        AddActions(Footer);
         FillSettings();
         FillPreferences();
 
@@ -679,13 +674,16 @@ namespace DynPals {
 
         S->bShownLocked = IsTargetLocked();
         const std::string Title = Utils::WStringToString(L"DYN PALS: " + TargetCharID);
-        if (S->bInspector) {
-            FillCorner();
-            S->Window->SetPlainTitleBar(Title);
-            S->Window->SetTitleIcon(S->bShownLocked ? kLockIcon : kUnlockedIcon);
-        } else {
-            S->Window->SetTitleBar(Title, S->bShownLocked ? "LOCKED" : "");
-        }
+        FillCorner();
+        S->Window->SetPlainTitleBar(Title);
+        S->Window->SetTitleIcon(S->bShownLocked ? kLockIcon : kUnlockedIcon);
+        // The pal's title, actions and camera icons have nothing to act on in Preferences.
+        S->Window->SetTabHandler([this](std::size_t Index) {
+            const bool bPalTab = Index == 0;
+            for (const auto Part : {PalUI::Client::WindowPart::TitleBar, PalUI::Client::WindowPart::Footer,
+                                    PalUI::Client::WindowPart::Corner})
+                S->Window->ShowPart(Part, bPalTab);
+        });
         S->Window->SelectTab(0);
     }
 
@@ -730,23 +728,23 @@ namespace DynPals {
         });
     }
 
-    std::wstring UIManager::FormatKeybindText(const std::wstring& Modifier, const std::wstring& Key) {
-        if (Key.empty() || Key == L"None") {
-            return L"[ Unset ]";
-        }
-        std::wstring result = L"[ ";
-        if (!Modifier.empty() && Modifier != L"None") result += Modifier + L" + ";
-        result += Key + L" ]";
-        return result;
+    // A bind's keys left to right as FKey names; none when unset.
+    static std::vector<std::string> KeysOf(const std::wstring& Modifier, const std::wstring& Key) {
+        if (Key.empty() || Key == L"None") return {};
+        std::vector<std::string> Keys;
+        if (!Modifier.empty() && Modifier != L"None") Keys.push_back(Utils::WStringToString(Modifier));
+        Keys.push_back(Utils::WStringToString(Key));
+        return Keys;
     }
 
     void UIManager::FillPreferences() {
         auto& Settings = SaveManager::Get().Settings;
         Built(S->Prefs.AddHeader("Global Keybinds"), "Header");
-        Built(S->Prefs.AddLabelWithButton("Main Menu Toggle", Utils::WStringToString(FormatKeybindText(Settings.MenuModifier, Settings.MenuKey)),
-                                    [this]() { StartKeyCapture(0); }), "LabelWithButton");
-        Built(S->Prefs.AddLabelWithButton("Direct Reroll Pal", Utils::WStringToString(FormatKeybindText(Settings.RerollModifier, Settings.RerollKey)),
-                                    [this]() { StartKeyCapture(2); }), "LabelWithButton");
+        const auto AddBind = [this](std::string_view Label, const std::wstring& Modifier, const std::wstring& Key, int Target) {
+            return Built(S->Prefs.AddKeyBind(Label, KeysOf(Modifier, Key), [this, Target]() { StartKeyCapture(Target); }), "KeyBind");
+        };
+        S->MenuBindRow = AddBind("Main Menu Toggle", Settings.MenuModifier, Settings.MenuKey, 0);
+        S->RerollBindRow = AddBind("Direct Reroll Pal", Settings.RerollModifier, Settings.RerollKey, 2);
         S->CaptureRow = Built(S->Prefs.AddLabel(""), "Label");
     }
 
@@ -768,8 +766,8 @@ namespace DynPals {
                 SaveManager::Get().SaveGlobal();
                 CaptureEndedAt = std::chrono::steady_clock::now();
 
-                // The bound key shows on the row's button, which takes no new text, so the page is filled again.
-                if (S->Prefs.IsValid() && S->Prefs.Clear()) FillPreferences();
+                (Target == 0 ? S->MenuBindRow : S->RerollBindRow).SetKeys(KeysOf(Mod, Key));
+                S->CaptureRow.SetText("");
             },
             [this]() {
                 CaptureEndedAt = std::chrono::steady_clock::now();
@@ -783,16 +781,11 @@ namespace DynPals {
         Utils::LoadAssetSafely(L"/Game/Pal/Effect/Common/LevelUp/NS_LevelUp_Pal");
     }
 
-    bool UIManager::AddActions(PalUI::Client::Page Into) {
+    void UIManager::AddActions(PalUI::Client::Page Into) {
         auto Reroll = [this]() { PalProcessor::Get().ProcessPal(TargetPal, true); bNeedsRefresh = true; };
         auto Reset = [this]() { if (TargetPal && Utils::IsObjectValid(TargetPal)) { PalProcessor::Get().ResetPal(TargetPal); bNeedsRefresh = true; } };
-        if (Into.AddButtons({{"Reroll Pal"}, {"Reset Pal", PalUI::ButtonTone::Warning}},
-                [Reroll, Reset](std::size_t Index) { Index == 0 ? Reroll() : Reset(); }).IsValid()) {
-            return true;
-        }
-        // A PalUI older than the button row refuses it; one button per row then.
-        const bool bRerolls = Built(Into.AddButton("Reroll Pal", Reroll), "Button").IsValid();
-        return Built(Into.AddButton("Reset Pal", Reset), "Button").IsValid() && bRerolls;
+        Built(Into.AddButtons({{"Reroll Pal"}, {"Reset Pal", PalUI::ButtonTone::Warning}},
+                [Reroll, Reset](std::size_t Index) { Index == 0 ? Reroll() : Reset(); }), "Buttons");
     }
 
     void UIManager::FillSettings() {
@@ -1004,11 +997,8 @@ namespace DynPals {
         }
 
 
-        // A section between corner dots; straight on the page with an older PalUI.
-        const auto Framed = [this]() {
-            const PalUI::Client::Page Frame = S->Settings.AddFrame();
-            return Frame.IsValid() ? Frame : S->Settings;
-        };
+        // A section between corner dots.
+        const auto Framed = [this]() { return S->Settings.AddFrame(); };
 
         // 3. Swap picker: one choice row per pack.
         Built(S->Settings.AddHeader("Current Swap"), "Header");
@@ -1023,36 +1013,21 @@ namespace DynPals {
                 if (Configs[i] == persistConfigIndex) Selected = i;
             }
             const std::size_t Pack = S->PackRows.size();
-            if (S->bInspector) {
-                // Slot 0 stands for "not from this pack", as a dropdown always shows one option.
-                std::vector<std::string> Options{"-"};
-                Options.insert(Options.end(), Labels.begin(), Labels.end());
-                S->PackRows.push_back(Built(Swap.AddDropdown(Utils::WStringToString(PackName), std::move(Options),
-                    Selected == PALUI_NO_INDEX ? 0 : Selected + 1, [this, Pack](std::size_t Index) {
-                    if (Index == 0 || Pack >= S->PackConfigs.size() || Index - 1 >= S->PackConfigs[Pack].size()) return;
-                    PalProcessor::Get().ForceSwap(TargetPal, S->PackConfigs[Pack][Index - 1]);
-                    bNeedsRefresh = true;
-                }), "Dropdown"));
-                if (Pack == 0) {
-                    Built(S->PackRows.back().AddIconCheck(kHideInvalidIcon, bHideInvalidSwaps, [this](bool bOn) {
-                        bHideInvalidSwaps = bOn;
-                        bNeedsRefresh = true;
-                    }), "IconCheck").SetTooltip("Hide Invalid Swaps");
-                }
-                S->PackConfigs.push_back(Configs);
-                Labels.clear();
-                Configs.clear();
-                return;
-            }
-            Built(Swap.AddHeader(Utils::WStringToString(PackName)), "Header");
-            S->PackRows.push_back(Built(Swap.AddChoices(Labels, Selected, [this, Pack](std::size_t Index) {
-                if (Pack >= S->PackConfigs.size() || Index >= S->PackConfigs[Pack].size()) return;
-                PalProcessor::Get().ForceSwap(TargetPal, S->PackConfigs[Pack][Index]);
-                for (std::size_t Other = 0; Other < S->PackRows.size(); ++Other) {
-                    if (Other != Pack) S->PackRows[Other].SetIndex(std::nullopt);
-                }
+            // Slot 0 stands for "not from this pack", as a dropdown always shows one option.
+            std::vector<std::string> Options{"-"};
+            Options.insert(Options.end(), Labels.begin(), Labels.end());
+            S->PackRows.push_back(Built(Swap.AddDropdown(Utils::WStringToString(PackName), std::move(Options),
+                Selected == PALUI_NO_INDEX ? 0 : Selected + 1, [this, Pack](std::size_t Index) {
+                if (Index == 0 || Pack >= S->PackConfigs.size() || Index - 1 >= S->PackConfigs[Pack].size()) return;
+                PalProcessor::Get().ForceSwap(TargetPal, S->PackConfigs[Pack][Index - 1]);
                 bNeedsRefresh = true;
-            }), "Choices"));
+            }), "Dropdown"));
+            if (Pack == 0) {
+                Built(S->PackRows.back().AddIconCheck(kHideInvalidIcon, bHideInvalidSwaps, [this](bool bOn) {
+                    bHideInvalidSwaps = bOn;
+                    bNeedsRefresh = true;
+                }), "IconCheck").SetTooltip("Hide Invalid Swaps");
+            }
             S->PackConfigs.push_back(Configs);
             Labels.clear();
             Configs.clear();
@@ -1072,30 +1047,6 @@ namespace DynPals {
             Configs.push_back(newDropdownConfigIndices[i]);
         }
         EndPack();
-
-        if (!S->bFooterActions) AddActions(Swap);
-        if (!S->bInspector) {
-            Built(S->Settings.AddSwitch("Hide Invalid", bHideInvalidSwaps, [this](bool bState) { bHideInvalidSwaps = bState; bNeedsRefresh = true; }), "Switch");
-            Built(S->Settings.AddSwitch("Focus Pal Camera", SaveManager::Get().Settings.bFocusPal, [this](bool bState) {
-                SaveManager::Get().Settings.bFocusPal = bState; SaveManager::Get().SaveWorldData();
-                if (bState) EnablePalCamera(); else DisablePalCamera();
-                bNeedsRefresh = true; 
-            }), "Switch");
-
-            // 5. Camera Controls (Relative Switch + Rotation Slider)
-            if (SaveManager::Get().Settings.bFocusPal) {
-                Built(S->Settings.AddSwitch("Relative Camera", SaveManager::Get().Settings.bRelativeCamera, [this](bool bState) {
-                    SaveManager::Get().Settings.bRelativeCamera = bState;
-                    SaveManager::Get().SaveWorldData();
-                    UpdatePalCameraRotation(SaveManager::Get().Settings.CameraRotation);
-                }), "Switch");
-                Built(S->Settings.AddSlider("Camera Rotation", SaveManager::Get().Settings.CameraRotation, 0.0, 360.0, [this](double NewValue) {
-                    SaveManager::Get().Settings.CameraRotation = NewValue;
-                    UpdatePalCameraRotation(NewValue);
-                    TriggerSaveDebounced(); // <--- Debounce disk write!
-                }), "Slider");
-            }
-        }
 
         // 6. Dynamic Size Slider
         if (currentPersist && persistConfigIndex != -1) {
@@ -1148,6 +1099,7 @@ namespace DynPals {
             std::wstring Label;
             double Chance = 0.0;
             bool bValid = false;
+            bool bCurrent = false;
             std::wstring Reason;
         };
         std::vector<std::pair<std::wstring, std::vector<FLogLine>>> LogPacks;
@@ -1179,7 +1131,7 @@ namespace DynPals {
                 LogPacks.emplace_back(cfg.PackName, std::vector<FLogLine>{});
                 Pack = std::prev(LogPacks.end());
             }
-            Pack->second.push_back({displayLabel, chance, eval.IsValid, eval.RejectionReason});
+            Pack->second.push_back({displayLabel, chance, eval.IsValid, eval.ConfigIndex == persistConfigIndex, eval.RejectionReason});
         }
 
         for (auto& [Pack, Lines] : LogPacks) {
@@ -1193,12 +1145,11 @@ namespace DynPals {
                     wchar_t pctBuf[16];
                     swprintf(pctBuf, 16, L"%.0f%%", Line.Chance * 100.0);
                     const std::string Label = Utils::WStringToString(L"   " + Line.Label);
-                    if (!Built(Log.AddMeter(Label, Line.Chance, Utils::WStringToString(pctBuf)), "Meter").IsValid()) {
-                        Built(Log.AddLabel(Label + "  " + Utils::WStringToString(pctBuf)), "Label");
-                    }
+                    const PalUI::Client::Row Meter = Built(Log.AddMeter(Label, Line.Chance, Utils::WStringToString(pctBuf)), "Meter");
+                    if (Line.bCurrent) Meter.SetSelected(true);
                     continue;
                 }
-                std::wstring Rejected = L"   x  " + Line.Label;
+                std::wstring Rejected = L"   x  " + Line.Label + (Line.bCurrent ? L"  (current)" : L"");
                 if (!Line.Reason.empty()) Rejected += L"  -  " + Line.Reason;
                 Built(Log.AddLabel(Utils::WStringToString(Rejected)), "Label").SetDimmed(true);
             }
@@ -1250,9 +1201,9 @@ namespace DynPals {
 
         if (bNeedsRefresh) {
             bNeedsRefresh = false;
-            if ((S->bInspector || IsTargetLocked() == S->bShownLocked) && S->Settings.Clear()) {
+            if (S->Settings.Clear()) {
                 FillSettings();
-                if (S->bInspector && IsTargetLocked() != S->bShownLocked) {
+                if (IsTargetLocked() != S->bShownLocked) {
                     S->bShownLocked = !S->bShownLocked;
                     S->Window->SetTitleIcon(S->bShownLocked ? kLockIcon : kUnlockedIcon);
                 }

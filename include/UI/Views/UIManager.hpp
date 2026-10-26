@@ -66,12 +66,11 @@ namespace DynPals {
         void Fill();
         void FillCorner();
         // Reroll and a red Reset into Into; false when PalUI built neither row.
-        bool AddActions(PalUI::Client::Page Into);
+        void AddActions(PalUI::Client::Page Into);
         bool IsTargetLocked();
         void FillSettings();
         void FillPreferences();
         void StartKeyCapture(int Target);
-        std::wstring FormatKeybindText(const std::wstring& Modifier, const std::wstring& Key);
 
         void UpdateTarget();
         void ApplySize(double NewValue);
