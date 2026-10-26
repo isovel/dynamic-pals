@@ -1,4 +1,5 @@
 #include <cmath>
+#include <numbers>
 #include "SettingsStore.hpp"
 
 #include "json.hpp"
@@ -55,6 +56,13 @@ namespace DynPals {
             if (!Newest || File.Modified > Newest->Modified) Newest = &File;
         }
         return Newest ? Newest->Path : std::wstring();
+    }
+
+    double CentredSideOffset(double ClearFrom, double Distance, double FovDegrees) {
+        if (!(ClearFrom > 0.0 && ClearFrom < 1.0) || !(FovDegrees > 0.0 && FovDegrees < 180.0)) return 0.0;
+        // The clear part's middle sits ClearFrom of the half-width right of centre; the camera moves left that far.
+        const double HalfWidth = Distance * std::tan(FovDegrees * std::numbers::pi / 360.0);
+        return -ClearFrom * HalfWidth;
     }
 
     double TurnedRotation(double Degrees, double DeltaUnits) {

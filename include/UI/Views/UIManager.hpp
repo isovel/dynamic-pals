@@ -7,7 +7,7 @@
 #include <vector>
 #include <Unreal/UObjectGlobals.hpp>
 
-namespace PalUI::Client { class Connection; class Row; }
+namespace PalUI::Client { class Connection; class Row; class Page; }
 
 namespace DynPals {
 
@@ -64,6 +64,9 @@ namespace DynPals {
         void Close();
         void OnClosed();
         void Fill();
+        void FillCorner();
+        // Reroll and a red Reset into Into; false when PalUI built neither row.
+        bool AddActions(PalUI::Client::Page Into);
         bool IsTargetLocked();
         void FillSettings();
         void FillPreferences();

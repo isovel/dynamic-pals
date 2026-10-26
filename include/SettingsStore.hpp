@@ -28,6 +28,10 @@ namespace DynPals {
     // Degrees turned by a drag of DeltaUnits slate units, at half a degree each, wrapped into [0, 360).
     double TurnedRotation(double Degrees, double DeltaUnits);
 
+    // The camera's sideways shift (a spring arm's socket Y) that centres a subject Distance ahead in the screen's part
+    // right of ClearFrom (0-1 of its width), at a horizontal field of view of FovDegrees; 0 when either is out of range.
+    double CentredSideOffset(double ClearFrom, double Distance, double FovDegrees);
+
     // The most recently modified Prefix*.json among Files, or empty.
     std::wstring NewestWorldSave(const std::vector<SaveCandidate>& Files, std::wstring_view Prefix);
 }

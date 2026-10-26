@@ -94,7 +94,7 @@ Upon successful compilation, the compiled `main.dll` and the dynamically updated
 ## How to Install the Mod
 
 1. Ensure [UE4SS](https://github.com/Okaetsu/RE-UE4SS) is installed in your Palworld directory (`Pal/Binaries/Win64/`).
-2. Install the [PalUI mod](https://github.com/isovel/pal-ui-lib/releases) beside it. The Alt+N menu is built with PalUI; without it DynamicPals still swaps pals, and Alt+N only says the menu needs PalUI.
+2. Install the [PalUI mod](https://github.com/isovel/pal-ui-lib/releases) beside it. The Alt+N menu is built with PalUI; without it DynamicPals still swaps pals, and Alt+N only says the menu needs PalUI. An older PalUI shows the menu without the Inspector layout: no icon toggles and no drag rotation.
 3. Create a folder named `DynamicPals` in your UE4SS `Mods` directory: 
    `Pal/Binaries/Win64/ue4ss/Mods/DynamicPals/`
 4. Copy your compiled `main.dll`, `version.txt` and `DynamicPals.pak` into:

@@ -9,6 +9,7 @@ namespace DynPals {
     bool bFocusPal = true;
     double CameraRotation = 180.0;
     bool bRelativeCamera = true;
+    bool bHideHUD = true;
     
     std::wstring MenuKey = L"N";
     std::wstring MenuModifier = L"LeftAlt"; 
@@ -43,6 +44,9 @@ namespace DynPals {
         .Field("RelativeCamera", &DynPalsSettings::bRelativeCamera)
             .Label("Relative camera")
             .Help("Measure the rotation from the pal's facing instead of the world's.")
+        .Field("HideHUD", &DynPalsSettings::bHideHUD)
+            .Label("Hide HUD")
+            .Help("Hide the game's HUD while the Alt+N inspector is open.")
         .Field("MenuKey", &DynPalsSettings::MenuKey)
             .Label("Menu key")
             .Help("Key names as Unreal spells them: N, F5, Gamepad_FaceButton_Top. None unbinds.")

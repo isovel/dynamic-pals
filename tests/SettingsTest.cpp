@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "Settings.hpp"
 #include "SettingsStore.hpp"
@@ -102,6 +103,16 @@ TEST_CASE("the newest world save is the one the import reads")
     };
     CHECK(NewestWorldSave(Files, L"_DynPals_Save_") == L"/m/_DynPals_Save_B.json");
     CHECK(NewestWorldSave({}, L"_DynPals_Save_").empty());
+}
+
+TEST_CASE("the side offset centres a pal right of the menu")
+{
+    CHECK(DynPals::CentredSideOffset(0.5, 100.0, 90.0) == Catch::Approx(-50.0));
+    CHECK(DynPals::CentredSideOffset(0.4, 200.0, 90.0) == Catch::Approx(-80.0));
+    CHECK(DynPals::CentredSideOffset(0.0, 100.0, 90.0) == 0.0);
+    CHECK(DynPals::CentredSideOffset(1.0, 100.0, 90.0) == 0.0);
+    CHECK(DynPals::CentredSideOffset(0.5, 100.0, 0.0) == 0.0);
+    CHECK(DynPals::CentredSideOffset(0.5, 100.0, 180.0) == 0.0);
 }
 
 TEST_CASE("a dragged rotation wraps into one turn")
